@@ -61,7 +61,8 @@ private:
     
     // États internes
     float _ah;                      ///< Ah depuis la dernière remise à zéro
-    float _ahCumul;                 ///< Ah totaux (depuis le dernier setTotalAh)
+    float _ahBase;                  ///< Ah restaurés via setTotalAh (base)
+    float _ahCumul;                 ///< Ah totaux (base + intégration)
     float _ahPerSecond;             ///< Ah par seconde (puissance)
     float _ahPerSecondAvg;          ///< Moyenne filtrée des Ah/s
     
@@ -136,6 +137,7 @@ public:
         _chargeEfficiency(1.0f),
         _dischargeEfficiency(1.0f),
         _ah(0.0f),
+        _ahBase(0.0f),
         _ahCumul(0.0f),
         _ahPerSecond(0.0f),
         _ahPerSecondAvg(0.0f),
@@ -168,7 +170,7 @@ public:
             _ah = initialAh;
         }
         
-        _ahCumul = _ah;
+        _ahCumul = _ahBase + _ah;
         _sampleCount = 0;
         _lastMicros = micros();
         _firstMeasurement = true;
@@ -239,7 +241,7 @@ public:
         
         // Mettre à jour les cumuls
         _ah += ahDelta;
-        _ahCumul = _ah;
+        _ahCumul = _ahBase + _ah;
         
         // Calculer les Ah par seconde
         _ahPerSecond = ahDelta / intervalSec;
@@ -267,7 +269,7 @@ public:
             _ah = 0.0f;
         }
         
-        _ahCumul = _ah;
+        _ahCumul = _ahBase + _ah;
         _sampleCount = 0;
         _totalChargeAh = 0.0f;
         _totalDischargeAh = 0.0f;
@@ -279,12 +281,14 @@ public:
      * @brief Restaure une valeur cumulée (appelé après un load de persistance)
      * @param ah Valeur cumulée à restaurer (Ah totaux)
      * 
+     * Définit la base sur laquelle l'intégration s'ajoutera.
      * À utiliser avec la librairie Fo170/Persistance :
      *   persistance.loadFloat("ah", &v);
      *   ahCounter.setTotalAh(v);
      */
     void setTotalAh(float ah) {
-        _ahCumul = ah;
+        _ahBase = ah;
+        _ahCumul = _ahBase + _ah;
         updateStateOfCharge();
     }
     
@@ -335,7 +339,7 @@ public:
         float correction = targetAh - _ahCumul;
         
         _ah += correction;
-        _ahCumul = _ah;
+        _ahCumul = _ahBase + _ah;
         
         updateStateOfCharge();
     }

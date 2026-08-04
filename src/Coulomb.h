@@ -55,7 +55,8 @@ private:
     
     // États internes
     float _coulomb;                ///< Coulombs depuis la dernière remise à zéro
-    float _coulombCumul;           ///< Coulombs totaux (depuis le dernier setTotalCoulombs)
+    float _coulombBase;            ///< Coulombs restaurés via setTotalCoulombs (base)
+    float _coulombCumul;           ///< Coulombs totaux (base + intégration)
     float _coulombPerSecond;       ///< Coulombs par seconde (puissance instantanée)
     float _coulombPerSecondAvg;    ///< Moyenne filtrée des Coulombs/s
     
@@ -103,6 +104,7 @@ public:
     Coulomb(float filterAlpha = 0.99) : 
         _filterAlpha(filterAlpha),
         _coulomb(0.0f),
+        _coulombBase(0.0f),
         _coulombCumul(0.0f),
         _coulombPerSecond(0.0f),
         _coulombPerSecondAvg(0.0f),
@@ -129,7 +131,7 @@ public:
      */
     void begin(float initialCoulomb = 0, bool resetTimestamp = true) {
         _coulomb = initialCoulomb;
-        _coulombCumul = initialCoulomb;
+        _coulombCumul = _coulombBase + initialCoulomb;
         _sampleCount = 0;
         
         if (resetTimestamp) {
@@ -208,7 +210,7 @@ public:
         
         // Mettre à jour les cumuls
         _coulomb += coulombDelta;
-        _coulombCumul = _coulomb;
+        _coulombCumul = _coulombBase + _coulomb;
         
         // Calculer les Coulombs par seconde (puissance instantanée)
         if (intervalSec > 1e-6) {
@@ -235,6 +237,7 @@ public:
      */
     void reset() {
         _coulomb = 0.0f;
+        _coulombBase = 0.0f;
         _coulombCumul = 0.0f;
         _sampleCount = 0;
         
@@ -253,17 +256,19 @@ public:
         (void)keepPersisted;
         reset();
     }
-    
+
     /**
      * @brief Restaure une valeur cumulée (appelé après un load de persistance)
      * @param coulombs Valeur cumulée à restaurer (Coulombs totaux)
      * 
+     * Définit la base sur laquelle l'intégration s'ajoutera.
      * À utiliser avec la librairie Fo170/Persistance :
      *   persistance.loadFloat("coulomb", &v);
      *   coulomb.setTotalCoulombs(v);
      */
     void setTotalCoulombs(float coulombs) {
-        _coulombCumul = coulombs;
+        _coulombBase = coulombs;
+        _coulombCumul = _coulombBase + _coulomb;
     }
     
     // ========== Getters ==========

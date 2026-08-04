@@ -1,8 +1,8 @@
-# CoulombAh
+# CoulombsAh
 
 Librairies **header-only** pour un coulomètre sur ESP8266 (WeMos D1 Mini), typiquement associées à un capteur de courant INA226.
 
-Version **1.0.0** · Licence **GPL-3.0** · Auteur : Olivier FOURNET · Dépôt : [github.com/Fo170/CoulombAh](https://github.com/Fo170/CoulombAh)
+Version **1.1.0** · Licence **GPL-3.0** · Auteur : Olivier FOURNET (olivier.fournet@free.fr) · Dépôt : [github.com/Fo170/CoulombsAh](https://github.com/Fo170/CoulombsAh)
 
 Deux classes indépendantes :
 
@@ -39,7 +39,7 @@ lib_extra_dirs = ../CoulombAh
 
 ```ini
 lib_deps =
-    https://github.com/Fo170/CoulombAh.git
+    https://github.com/Fo170/CoulombsAh.git
 ```
 
 Puis inclure dans le code :
@@ -63,7 +63,7 @@ pio device monitor -d exemples/Coulomb   # baud 115200
 #include <Arduino.h>
 #include "Coulomb.h"
 
-Coulomb coulomb(0, 0.99);   // persistance EEPROM à l'adresse 0, filtrage 0.99
+Coulomb coulomb(0.99);   // filtrage 0.99 (plus de persistance interne)
 
 void loop() {
   float courant = lireCourant();           // en Ampères
@@ -78,7 +78,7 @@ void loop() {
 #include <Arduino.h>
 #include "AmpereHeure.h"
 
-AmpereHeure ah(0, 14.0, 0.99);  // persistance EEPROM à l'adresse 0, batterie 14 Ah
+AmpereHeure ah(14.0, 0.99);  // batterie 14 Ah, filtrage 0.99
 
 void setup() {
   ah.begin(0.0f, 0.90f);        // démarre à 90 % de charge
@@ -92,12 +92,41 @@ void loop() {
 }
 ```
 
-## Persistance EEPROM
+## Persistance (via Fo170/Persistance)
 
-Chaque compteur peut conserver sa valeur dans l'EEPROM de l'ESP8266 (4 octets par compteur).
+Depuis la **v1.1.0**, la persistance est déléguée à la librairie
+[**Fo170/Persistance**](https://github.com/Fo170/Persistance) (EEPROM, FRAM ou LittleFS).
+`Coulomb.h` / `AmpereHeure.h` sont désormais sans persistance interne (plus de
+constructeur à adresse, plus de `save()` / `load()`).
 
-- Constructeur avec adresse (ex. `Coulomb c(0, 0.99)`) : la valeur sauvegardée est chargée au démarrage.
-- Sauvegarde manuelle via `save()` (ex. périodiquement) ; le destructeur sauvegarde également.
+- **Sauvegarde** : lire `getTotalCoulombs()` (ou `getTotalAh()`) et l'écrire via Persistance.
+- **Restauration** : charger la valeur via Persistance puis `setTotalCoulombs(v)` (ou `setTotalAh(v)`).
+
+Exemple avec PersistanceEEPROM :
+
+```cpp
+#include "Coulomb.h"
+#include <persistance_EEPROM.h>
+
+Coulomb coulomb(0.99);
+PersistanceEEPROM persistance(512);
+
+void setup() {
+  persistance.begin();
+  persistance.addRegister("coulomb", sizeof(float));
+
+  float saved = 0.0f;
+  if (persistance.loadFloat("coulomb", &saved)) coulomb.setTotalCoulombs(saved);
+}
+
+void loop() {
+  coulomb.addMeasurement(lireCourant(), micros());
+  persistance.saveFloat("coulomb", coulomb.getTotalCoulombs());  // périodiquement
+}
+```
+
+Voir les exemples complets `exemples/Coulomb/` et `exemples/AmpereHeure/` (dépendance
+`Fo170/Persistance >= 1.0` déclarée dans leur `platformio.ini`).
 
 ## Notes
 

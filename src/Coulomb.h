@@ -21,20 +21,23 @@
  * }
  * @endcode
  * 
- * Version: 1.0.0
- * Date: Mars 2026
+ * La persistance (EEPROM, FRAM, LittleFS) est déléguée à la librairie
+ * Fo170/Persistance : on restaure via setTotalCoulombs() et on sauvegarde
+ * via getTotalCoulombs() (ou getCoulombs()).
+ * 
+ * Version: 1.1.0
+ * Date: Août 2026
  */
 
 #ifndef COULOMB_H
 #define COULOMB_H
 
 #include <Arduino.h>
-#include <EEPROM.h>
 #include <climits>
 
 /**
  * @class Coulomb
- * @brief Compteur de Coulombs avec filtrage et persistance optionnelle
+ * @brief Compteur de Coulombs avec filtrage
  * 
  * Calcule et cumule les Coulombs (1 Coulomb = 1 Ampère × 1 seconde)
  * à partir de mesures de courant et d'intervalles de temps.
@@ -42,7 +45,6 @@
  * Caractéristiques:
  * - Calcul précis avec timestamps microsecondes
  * - Filtrage exponentiel du courant et des intervalles
- * - Persistance optionnelle en EEPROM
  * - Statistiques (moyennes, min, max, nombre d'échantillons)
  * - Gestion des débordements de micros()
  */
@@ -50,13 +52,10 @@ class Coulomb {
 private:
     // Paramètres de configuration
     float _filterAlpha;           ///< Coefficient de filtrage exponentiel (0-1)
-    bool _usePersistentStorage;    ///< Active la sauvegarde en EEPROM
-    int _eepromAddress;            ///< Adresse de base en EEPROM (4 bytes)
     
     // États internes
     float _coulomb;                ///< Coulombs depuis la dernière remise à zéro
-    float _coulombCumul;           ///< Coulombs totaux (avec valeur sauvegardée)
-    float _coulombPersisted;       ///< Valeur sauvegardée avant démarrage
+    float _coulombCumul;           ///< Coulombs totaux (depuis le dernier setTotalCoulombs)
     float _coulombPerSecond;       ///< Coulombs par seconde (puissance instantanée)
     float _coulombPerSecondAvg;    ///< Moyenne filtrée des Coulombs/s
     
@@ -95,47 +94,16 @@ private:
         return diff * 0.000001f; // Conversion microsecondes -> secondes
     }
     
-    /**
-     * @brief Charge la valeur persistante depuis l'EEPROM
-     */
-    void loadFromEEPROM() {
-        if (!_usePersistentStorage) return;
-        
-        EEPROM.begin(4); // 4 bytes pour un float
-        EEPROM.get(_eepromAddress, _coulombPersisted);
-        EEPROM.end();
-        
-        // Vérification que la valeur est valide
-        if (isnan(_coulombPersisted) || isinf(_coulombPersisted)) {
-            _coulombPersisted = 0.0f;
-        }
-    }
-    
-    /**
-     * @brief Sauvegarde la valeur courante en EEPROM
-     */
-    void saveToEEPROM() {
-        if (!_usePersistentStorage) return;
-        
-        EEPROM.begin(4);
-        EEPROM.put(_eepromAddress, _coulombCumul);
-        EEPROM.commit();
-        EEPROM.end();
-    }
-    
 public:
     /**
-     * @brief Constructeur sans persistance EEPROM
+     * @brief Constructeur
      * @param filterAlpha Coefficient de filtrage (0-1, défaut: 0.99)
      *        Plus proche de 1 = filtrage plus fort
      */
     Coulomb(float filterAlpha = 0.99) : 
         _filterAlpha(filterAlpha),
-        _usePersistentStorage(false),
-        _eepromAddress(0),
         _coulomb(0.0f),
         _coulombCumul(0.0f),
-        _coulombPersisted(0.0f),
         _coulombPerSecond(0.0f),
         _coulombPerSecondAvg(0.0f),
         _lastMicros(0),
@@ -150,44 +118,9 @@ public:
         _trackMinMax(false) {}
     
     /**
-     * @brief Constructeur avec persistance EEPROM
-     * @param eepromAddress Adresse en EEPROM (0-511 pour ESP8266)
-     * @param filterAlpha Coefficient de filtrage (défaut: 0.99)
-     */
-    Coulomb(int eepromAddress, float filterAlpha = 0.99) : 
-        _filterAlpha(filterAlpha),
-        _usePersistentStorage(true),
-        _eepromAddress(eepromAddress),
-        _coulomb(0.0f),
-        _coulombCumul(0.0f),
-        _coulombPersisted(0.0f),
-        _coulombPerSecond(0.0f),
-        _coulombPerSecondAvg(0.0f),
-        _lastMicros(0),
-        _lastIntervalSec(0.001f),
-        _avgIntervalSec(0.001f),
-        _firstMeasurement(true),
-        _current(0.0f),
-        _currentAvg(0.0f),
-        _sampleCount(0),
-        _maxCoulomb(-1e38f),
-        _minCoulomb(1e38f),
-        _trackMinMax(false) {
-        
-        // Charger la valeur persistée
-        loadFromEEPROM();
-        _coulombCumul = _coulombPersisted;
-    }
-    
-    /**
      * @brief Destructeur
      */
-    ~Coulomb() {
-        // Sauvegarder automatiquement si nécessaire
-        if (_usePersistentStorage) {
-            save();
-        }
-    }
+    ~Coulomb() {}
     
     /**
      * @brief Initialise le compteur
@@ -196,7 +129,7 @@ public:
      */
     void begin(float initialCoulomb = 0, bool resetTimestamp = true) {
         _coulomb = initialCoulomb;
-        _coulombCumul = _coulombPersisted + initialCoulomb;
+        _coulombCumul = initialCoulomb;
         _sampleCount = 0;
         
         if (resetTimestamp) {
@@ -275,7 +208,7 @@ public:
         
         // Mettre à jour les cumuls
         _coulomb += coulombDelta;
-        _coulombCumul = _coulombPersisted + _coulomb;
+        _coulombCumul = _coulomb;
         
         // Calculer les Coulombs par seconde (puissance instantanée)
         if (intervalSec > 1e-6) {
@@ -298,19 +231,12 @@ public:
     }
     
     /**
-     * @brief Réinitialise le compteur (sans affecter la valeur persistée)
-     * @param keepPersisted Si true, conserve la valeur persistée
+     * @brief Réinitialise le compteur à zéro
      */
-    void reset(bool keepPersisted = true) {
+    void reset() {
         _coulomb = 0.0f;
+        _coulombCumul = 0.0f;
         _sampleCount = 0;
-        
-        if (keepPersisted) {
-            _coulombCumul = _coulombPersisted;
-        } else {
-            _coulombCumul = 0.0f;
-            _coulombPersisted = 0.0f;
-        }
         
         // Réinitialiser les stats
         if (_trackMinMax) {
@@ -318,50 +244,26 @@ public:
             _minCoulomb = 1e38f;
         }
     }
-    
+
     /**
-     * @brief Réinitialise complètement (y compris la valeur persistée)
+     * @brief Rétro-compatibilité : réinitialise le compteur à zéro.
+     * @param keepPersisted Ignoré (plus de persistance interne).
      */
-    void resetComplete() {
-        reset(false);
-        if (_usePersistentStorage) {
-            _coulombPersisted = 0.0f;
-            save();
-        }
+    void reset(bool keepPersisted) {
+        (void)keepPersisted;
+        reset();
     }
     
     /**
-     * @brief Définit la valeur persistée
-     * @param coulombs Nouvelle valeur persistée
-     * @param saveNow Si true, sauvegarde immédiatement en EEPROM
+     * @brief Restaure une valeur cumulée (appelé après un load de persistance)
+     * @param coulombs Valeur cumulée à restaurer (Coulombs totaux)
+     * 
+     * À utiliser avec la librairie Fo170/Persistance :
+     *   persistance.loadFloat("coulomb", &v);
+     *   coulomb.setTotalCoulombs(v);
      */
-    void setPersistedValue(float coulombs, bool saveNow = true) {
-        _coulombPersisted = coulombs;
-        _coulombCumul = _coulombPersisted + _coulomb;
-        
-        if (saveNow && _usePersistentStorage) {
-            save();
-        }
-    }
-    
-    /**
-     * @brief Sauvegarde la valeur courante en EEPROM
-     */
-    void save() {
-        if (!_usePersistentStorage) return;
-        
-        _coulombPersisted = _coulombCumul;
-        saveToEEPROM();
-    }
-    
-    /**
-     * @brief Charge la valeur depuis l'EEPROM
-     */
-    void load() {
-        if (!_usePersistentStorage) return;
-        
-        loadFromEEPROM();
-        _coulombCumul = _coulombPersisted + _coulomb;
+    void setTotalCoulombs(float coulombs) {
+        _coulombCumul = coulombs;
     }
     
     // ========== Getters ==========
@@ -372,14 +274,9 @@ public:
     float getCoulombs() const { return _coulomb; }
     
     /**
-     * @return Coulombs totaux (persistés + depuis démarrage)
+     * @return Coulombs totaux (depuis le dernier reset ou setTotalCoulombs)
      */
     float getTotalCoulombs() const { return _coulombCumul; }
-    
-    /**
-     * @return Valeur persistée (avant démarrage)
-     */
-    float getPersistedValue() const { return _coulombPersisted; }
     
     /**
      * @return Coulombs par seconde actuels
@@ -475,7 +372,6 @@ public:
         Serial.println("=== COULOMB COUNTER DEBUG ===");
         Serial.print("Coulombs (current): "); Serial.println(_coulomb, 6);
         Serial.print("Coulombs (total): "); Serial.println(_coulombCumul, 6);
-        Serial.print("Persisted: "); Serial.println(_coulombPersisted, 6);
         Serial.print("C/s: "); Serial.println(_coulombPerSecond, 6);
         Serial.print("C/s avg: "); Serial.println(_coulombPerSecondAvg, 6);
         Serial.print("Current: "); Serial.print(_current, 3); Serial.println(" A");

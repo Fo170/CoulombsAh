@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief Exemple d'utilisation de la librairie AmpereHeure.h
+ * @brief Exemple d'utilisation de la librairie AmpereHeure.h + Persistance
  *
  * Monitoring de batterie :
  * - Ampères-heures cumulés (1 Ah = 3600 C)
@@ -9,25 +9,30 @@
  * - Alerte batterie faible
  * - Estimation de l'autonomie restante
  *
+ * La persistance est déléguée à Fo170/Persistance (EEPROM, FRAM ou LittleFS).
+ * Ici : PersistanceEEPROM (512 o). On sauvegarde getTotalAh() et on restaure
+ * via setTotalAh().
+ *
  * Matériel :
  * - ESP8266 (WeMos D1 Mini / Lolin)
  *
- * Version : 1.0.0
+ * Version : 1.1.0
  */
 
 #include <Arduino.h>
 #include "AmpereHeure.h"
+#include <persistance_EEPROM.h>
 
 // ==================== CONFIGURATION ====================
 #define BATTERY_CAPACITY_AH  14.0   // Capacité nominale de la batterie en Ah
-#define EEPROM_ADDR          0      // Adresse EEPROM pour la persistance (4 octets)
+#define EEPROM_SIZE          512    // Taille EEPROM utilisée
 #define FILTER_ALPHA         0.99   // Coefficient de filtrage
 #define PRINT_INTERVAL_MS    1000   // Affichage toutes les 1 s
-#define SAVE_INTERVAL_MS     60000  // Sauvegarde EEPROM toutes les 60 s
+#define SAVE_INTERVAL_MS     60000  // Sauvegarde toutes les 60 s
 
 // ==================== OBJETS GLOBAUX ====================
-// Constructeur avec persistance EEPROM : charge la valeur sauvegardée au démarrage.
-AmpereHeure ah(EEPROM_ADDR, BATTERY_CAPACITY_AH, FILTER_ALPHA);
+AmpereHeure ah(BATTERY_CAPACITY_AH, FILTER_ALPHA);
+PersistanceEEPROM persistance(EEPROM_SIZE);
 
 // ==================== MESURE DU COURANT ====================
 
@@ -47,7 +52,22 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
-  Serial.println("\n=== EXEMPLE AmpereHeure.h ===");
+  Serial.println("\n=== EXEMPLE AmpereHeure.h + Persistance ===");
+
+  if (!persistance.begin()) {
+    Serial.println("Échec EEPROM.begin");
+    return;
+  }
+  persistance.addRegister("ah", sizeof(float));
+
+  // Restauration depuis la persistance.
+  float savedAh = 0.0f;
+  if (persistance.loadFloat("ah", &savedAh)) {
+    Serial.print("Ah restaurés : "); Serial.print(savedAh, 2); Serial.println(" Ah");
+    ah.setTotalAh(savedAh);
+  } else {
+    Serial.println("Premier démarrage : compteur à 0 Ah");
+  }
 
   // Démarrage à 90 % de charge (batterie presque pleine)
   ah.begin(0.0f, 0.90f);
@@ -91,10 +111,10 @@ void loop() {
     lastPrint = now;
   }
 
-  // Sauvegarde périodique en EEPROM
+  // Sauvegarde périodique via Persistance
   if (now - lastSave >= SAVE_INTERVAL_MS) {
-    ah.save();
-    Serial.println("\nDonnées sauvegardées en EEPROM.");
+    persistance.saveFloat("ah", ah.getTotalAh());
+    Serial.println("\nAh sauvegardés via Persistance.");
     lastSave = now;
   }
 }

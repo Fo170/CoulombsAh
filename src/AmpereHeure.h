@@ -24,15 +24,18 @@
  * }
  * @endcode
  * 
- * Version: 1.0.0
- * Date: Mars 2026
+ * La persistance (EEPROM, FRAM, LittleFS) est déléguée à la librairie
+ * Fo170/Persistance : on restaure via setTotalAh() et on sauvegarde
+ * via getTotalAh() (ou getAh()).
+ * 
+ * Version: 1.1.0
+ * Date: Août 2026
  */
 
 #ifndef AMPEREHEURE_H
 #define AMPEREHEURE_H
 
 #include <Arduino.h>
-#include <EEPROM.h>
 #include <climits>
 
 /**
@@ -45,14 +48,11 @@
  * - Capacité totale/configurable
  * - Alertes de décharge complète
  * - Efficacité de charge/décharge
- * - Persistance optionnelle
  */
 class AmpereHeure {
 private:
     // Paramètres de configuration
     float _filterAlpha;           ///< Coefficient de filtrage exponentiel (0-1)
-    bool _usePersistentStorage;    ///< Active la sauvegarde en EEPROM
-    int _eepromAddress;            ///< Adresse de base en EEPROM (4 bytes)
     
     // Paramètres batterie
     float _batteryCapacityAh;      ///< Capacité nominale de la batterie en Ah
@@ -61,8 +61,7 @@ private:
     
     // États internes
     float _ah;                      ///< Ah depuis la dernière remise à zéro
-    float _ahCumul;                 ///< Ah totaux (avec valeur sauvegardée)
-    float _ahPersisted;             ///< Valeur sauvegardée avant démarrage
+    float _ahCumul;                 ///< Ah totaux (depuis le dernier setTotalAh)
     float _ahPerSecond;             ///< Ah par seconde (puissance)
     float _ahPerSecondAvg;          ///< Moyenne filtrée des Ah/s
     
@@ -105,33 +104,6 @@ private:
     }
     
     /**
-     * @brief Charge la valeur persistante depuis l'EEPROM
-     */
-    void loadFromEEPROM() {
-        if (!_usePersistentStorage) return;
-        
-        EEPROM.begin(4);
-        EEPROM.get(_eepromAddress, _ahPersisted);
-        EEPROM.end();
-        
-        if (isnan(_ahPersisted) || isinf(_ahPersisted)) {
-            _ahPersisted = 0.0f;
-        }
-    }
-    
-    /**
-     * @brief Sauvegarde la valeur courante en EEPROM
-     */
-    void saveToEEPROM() {
-        if (!_usePersistentStorage) return;
-        
-        EEPROM.begin(4);
-        EEPROM.put(_eepromAddress, _ahCumul);
-        EEPROM.commit();
-        EEPROM.end();
-    }
-    
-    /**
      * @brief Met à jour l'état de charge
      */
     void updateStateOfCharge() {
@@ -154,20 +126,17 @@ private:
     
 public:
     /**
-     * @brief Constructeur sans persistance EEPROM
+     * @brief Constructeur
      * @param batteryCapacityAh Capacité nominale de la batterie en Ah
      * @param filterAlpha Coefficient de filtrage (défaut: 0.99)
      */
     AmpereHeure(float batteryCapacityAh, float filterAlpha = 0.99) : 
         _filterAlpha(filterAlpha),
-        _usePersistentStorage(false),
-        _eepromAddress(0),
         _batteryCapacityAh(batteryCapacityAh),
         _chargeEfficiency(1.0f),
         _dischargeEfficiency(1.0f),
         _ah(0.0f),
         _ahCumul(0.0f),
-        _ahPersisted(0.0f),
         _ahPerSecond(0.0f),
         _ahPerSecondAvg(0.0f),
         _lastMicros(0),
@@ -187,45 +156,6 @@ public:
         _lowBatteryThreshold(0.2f) {} // 20% par défaut
     
     /**
-     * @brief Constructeur avec persistance EEPROM
-     * @param eepromAddress Adresse en EEPROM
-     * @param batteryCapacityAh Capacité nominale de la batterie
-     * @param filterAlpha Coefficient de filtrage
-     */
-    AmpereHeure(int eepromAddress, float batteryCapacityAh, float filterAlpha = 0.99) : 
-        _filterAlpha(filterAlpha),
-        _usePersistentStorage(true),
-        _eepromAddress(eepromAddress),
-        _batteryCapacityAh(batteryCapacityAh),
-        _chargeEfficiency(1.0f),
-        _dischargeEfficiency(1.0f),
-        _ah(0.0f),
-        _ahCumul(0.0f),
-        _ahPersisted(0.0f),
-        _ahPerSecond(0.0f),
-        _ahPerSecondAvg(0.0f),
-        _lastMicros(0),
-        _lastIntervalSec(0.001f),
-        _avgIntervalSec(0.001f),
-        _firstMeasurement(true),
-        _current(0.0f),
-        _currentAvg(0.0f),
-        _currentDirection(0.0f),
-        _sampleCount(0),
-        _maxAh(-1e38f),
-        _minAh(1e38f),
-        _totalChargeAh(0.0f),
-        _totalDischargeAh(0.0f),
-        _stateOfCharge(0.0f),
-        _lowBatteryAlert(false),
-        _lowBatteryThreshold(0.2f) {
-        
-        loadFromEEPROM();
-        _ahCumul = _ahPersisted;
-        updateStateOfCharge();
-    }
-    
-    /**
      * @brief Initialise le compteur
      * @param initialAh Valeur initiale d'Ah (défaut: 0)
      * @param initialSoC État de charge initial (0-1, si >0, prioritaire)
@@ -238,7 +168,7 @@ public:
             _ah = initialAh;
         }
         
-        _ahCumul = _ahPersisted + _ah;
+        _ahCumul = _ah;
         _sampleCount = 0;
         _lastMicros = micros();
         _firstMeasurement = true;
@@ -309,7 +239,7 @@ public:
         
         // Mettre à jour les cumuls
         _ah += ahDelta;
-        _ahCumul = _ahPersisted + _ah;
+        _ahCumul = _ah;
         
         // Calculer les Ah par seconde
         _ahPerSecond = ahDelta / intervalSec;
@@ -328,25 +258,17 @@ public:
     
     /**
      * @brief Réinitialise le compteur
-     * @param keepPersisted Si true, conserve la valeur persistée
      * @param resetToFull Si true, réinitialise à pleine charge (capacité)
      */
-    void reset(bool keepPersisted = true, bool resetToFull = false) {
+    void reset(bool resetToFull = false) {
         if (resetToFull) {
             _ah = _batteryCapacityAh;
         } else {
             _ah = 0.0f;
         }
         
+        _ahCumul = _ah;
         _sampleCount = 0;
-        
-        if (keepPersisted) {
-            _ahCumul = _ahPersisted + _ah;
-        } else {
-            _ahCumul = _ah;
-            _ahPersisted = 0.0f;
-        }
-        
         _totalChargeAh = 0.0f;
         _totalDischargeAh = 0.0f;
         
@@ -354,13 +276,16 @@ public:
     }
     
     /**
-     * @brief Sauvegarde la valeur courante en EEPROM
+     * @brief Restaure une valeur cumulée (appelé après un load de persistance)
+     * @param ah Valeur cumulée à restaurer (Ah totaux)
+     * 
+     * À utiliser avec la librairie Fo170/Persistance :
+     *   persistance.loadFloat("ah", &v);
+     *   ahCounter.setTotalAh(v);
      */
-    void save() {
-        if (!_usePersistentStorage) return;
-        
-        _ahPersisted = _ahCumul;
-        saveToEEPROM();
+    void setTotalAh(float ah) {
+        _ahCumul = ah;
+        updateStateOfCharge();
     }
     
     // ========== Configuration batterie ==========
@@ -410,7 +335,7 @@ public:
         float correction = targetAh - _ahCumul;
         
         _ah += correction;
-        _ahCumul = _ahPersisted + _ah;
+        _ahCumul = _ah;
         
         updateStateOfCharge();
     }
@@ -537,7 +462,6 @@ public:
         Serial.println("=== AMPERE-HEURE COUNTER DEBUG ===");
         Serial.print("Ah (current): "); Serial.println(_ah, 6);
         Serial.print("Ah (total): "); Serial.println(_ahCumul, 6);
-        Serial.print("Persisted: "); Serial.println(_ahPersisted, 6);
         Serial.print("State of Charge: "); Serial.print(_stateOfCharge * 100, 1); Serial.println("%");
         Serial.print("Remaining: "); Serial.print(getRemainingCapacity(), 3); Serial.println(" Ah");
         Serial.print("Battery capacity: "); Serial.print(_batteryCapacityAh, 1); Serial.println(" Ah");

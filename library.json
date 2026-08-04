@@ -1,0 +1,23 @@
+{
+  "name": "CoulombAh",
+  "version": "1.0.0",
+  "description": "Librairies header-only pour coulomètre ESP8266 : comptage en Coulombs (Coulomb.h) et en Ampères-heures avec état de charge batterie (AmpereHeure.h)",
+  "keywords": "coulomb, ampere-heure, ampere-hours, batterie, battery, soc, coulomètre, coulombmeter, esp8266, ina226",
+  "authors": [
+    {
+      "name": "Olivier FOURNET",
+      "email": "olivier.fournet@free.fr"
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fo170/CoulombAh"
+  },
+  "license": "GPL-3.0",
+  "frameworks": "arduino",
+  "platforms": "espressif8266",
+  "headers": [
+    "Coulomb.h",
+    "AmpereHeure.h"
+  ]
+}

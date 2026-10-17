@@ -33,7 +33,7 @@
 #define COULOMB_H
 
 // Version de la librairie (source UNIQUE — agrégée par src/liste_lib.h)
-#define __COULOMB_H_VERSION__ "1.2.0"
+#define __COULOMB_H_VERSION__ "1.2.1"
 
 #include <Arduino.h>
 #include <climits>

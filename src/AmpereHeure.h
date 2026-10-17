@@ -35,6 +35,9 @@
 #ifndef AMPEREHEURE_H
 #define AMPEREHEURE_H
 
+// Version de la librairie (source UNIQUE — agrégée par src/liste_lib.h)
+#define __AMPEREHEURE_H_VERSION__ "1.2.0"
+
 #include <Arduino.h>
 #include <climits>
 
@@ -56,8 +59,11 @@ private:
     
     // Paramètres batterie
     float _batteryCapacityAh;      ///< Capacité nominale de la batterie en Ah
-    float _chargeEfficiency;       ///< Efficacité en charge (0-1)
-    float _dischargeEfficiency;    ///< Efficacité en décharge (0-1)
+    float _chargeEfficiency;       ///< Efficacité en charge (0-1) — base à I_ref
+    float _dischargeEfficiency;    ///< Efficacité en décharge (0-1) — base à I_ref
+    // NOUVEAU v1.2.0 : Peukert dynamique + rendement variable (phase 7)
+    float _peukertN;               ///< Exposant de Peukert n (1 = désactivé)
+    float _peukertIref;            ///< Courant de référence (A) pour η et Peukert
     
     // États internes
     float _ah;                      ///< Ah depuis la dernière remise à zéro
@@ -136,6 +142,8 @@ public:
         _batteryCapacityAh(batteryCapacityAh),
         _chargeEfficiency(1.0f),
         _dischargeEfficiency(1.0f),
+        _peukertN(1.0f),
+        _peukertIref(5.0f),
         _ah(0.0f),
         _ahBase(0.0f),
         _ahCumul(0.0f),
@@ -230,12 +238,19 @@ public:
         // Calculer les Ah pour cet intervalle (I × Δt / 3600)
         float ahDelta = (currentAmps * intervalSec) / 3600.0f;
         
-        // Appliquer l'efficacité selon la direction
+        // Appliquer l'efficacité selon la direction (v1.2.0 : η VARIABLE en I)
+        // ⚠️ CONVENTION : η ∈ [0.5, 1] ⇒ ΔAh est RÉDUIT en magnitude, donc le SoC
+        //    évolue de façon CONSERVATRICE (baisse plus lente en décharge, monte plus
+        //    lentement en charge). C'est la convention « rendement faradique » — elle
+        //    est DIFFÉRENTE du ratio de Peukert de BatteryModel::updateCoulombCount
+        //    (qui, lui, ACCÉLÈRE la baisse en décharge : peukert_ratio = C_nom/C_eff > 1).
+        //    Ne pas confondre les deux modèles (AmpereHeure n'est pas instancié par le
+        //    firmware Coulométre, qui utilise Coulomb.h + BatteryKalman).
         if (currentAmps > 0) { // Charge
-            ahDelta *= _chargeEfficiency;
+            ahDelta *= getChargeEfficiency(currentAmps);
             _totalChargeAh += ahDelta;
         } else if (currentAmps < 0) { // Décharge
-            ahDelta *= _dischargeEfficiency;
+            ahDelta *= getDischargeEfficiency(currentAmps);
             _totalDischargeAh += -ahDelta; // Stocker en positif
         }
         
@@ -314,6 +329,54 @@ public:
         if (charge > 0 && charge <= 1) _chargeEfficiency = charge;
         if (discharge > 0 && discharge <= 1) _dischargeEfficiency = discharge;
     }
+
+    // ===== NOUVEAU v1.2.0 : Peukert dynamique + rendement variable =====
+    /**
+     * @brief Exposant de Peukert n (loi de Peukert). 1.0 = désactivé (idéal).
+     *        Plomb typique : 1.10 (AGM) … 1.40 (inondé).
+     */
+    void setPeukertExponent(float n) {
+        if (isfinite(n) && n >= 1.0f && n <= 2.0f) _peukertN = n;
+    }
+    float getPeukertExponent() const { return _peukertN; }
+
+    /**
+     * @brief Courant de référence (A) : c'est à ce courant que les efficacités
+     *        de base (setEfficiencies) sont définies. Sert aussi de I_ref Peukert.
+     */
+    void setPeukertReferenceRate(float iref_A) {
+        if (isfinite(iref_A) && iref_A > 0.0f) _peukertIref = iref_A;
+    }
+    float getPeukertReferenceRate() const { return _peukertIref; }
+
+    /**
+     * @brief Rendement en charge VARIABLE selon le courant (phase 7, AC-7.3).
+     *        η_chg(I) = η_base × (I_ref/|I|)^(n−1), borné [0.5, 1].
+     *        À fort courant, une part de l'énergie part en chaleur/gaz → η baisse.
+     */
+    float getChargeEfficiency(float current) const {
+        return variableEfficiency(_chargeEfficiency, current);
+    }
+    /**
+     * @brief Rendement en décharge VARIABLE selon le courant (phase 7, AC-7.3).
+     *        Effet Peukert : capacité utile réduite à fort courant.
+     */
+    float getDischargeEfficiency(float current) const {
+        return variableEfficiency(_dischargeEfficiency, current);
+    }
+
+private:
+    float variableEfficiency(float base, float current) const {
+        if (_peukertN <= 1.0f) return base;
+        float I = fabsf(current);
+        if (!isfinite(I) || I < 1e-3f) return base;
+        float eta = base * powf(_peukertIref / I, _peukertN - 1.0f);
+        if (eta > 1.0f) eta = 1.0f;
+        if (eta < 0.5f) eta = 0.5f;
+        return eta;
+    }
+
+public:
     
     /**
      * @brief Définit le seuil d'alerte batterie faible

@@ -25,15 +25,25 @@
  * Fo170/Persistance : on restaure via setTotalCoulombs() et on sauvegarde
  * via getTotalCoulombs() (ou getCoulombs()).
  * 
- * Version: 1.1.0
- * Date: Août 2026
+ * v1.3.0 (18/10/2026) : rendement faradique η APPLIQUÉ À L'INTÉGRATION.
+ *   Avant, `addMeasurement()` intégrait le courant brut (η=1 implicite) : la
+ *   charge solaire était comptée à 1:1 alors que le rendement réel d'une
+ *   batterie plomb vaut 0,65-0,90 selon le courant → SoC dérivait de +7 %/cycle
+ *   (mesuré sur le Coulométre, 18/10/2026). Désormais :
+ *     ΔAh = I · Δt · η(I),  η(I) = η_base · (I_ref/|I|)^(n−1), borné [0,5 ; 1]
+ *   η(I) est la même loi que `AmpereHeure::variableEfficiency()` (Peukert) ;
+ *   η_charge et η_décharge sont distincts. Défaut η=1 et n=1 ⇒ comportement
+ *   identique à la v1.2.1 (rétrocompatible).
+ * 
+ * Version: 1.3.0
+ * Date: Octobre 2026
  */
 
 #ifndef COULOMB_H
 #define COULOMB_H
 
 // Version de la librairie (source UNIQUE — agrégée par src/liste_lib.h)
-#define __COULOMB_H_VERSION__ "1.2.1"
+#define __COULOMB_H_VERSION__ "1.3.0"
 
 #include <Arduino.h>
 #include <climits>
@@ -55,6 +65,13 @@ class Coulomb {
 private:
     // Paramètres de configuration
     float _filterAlpha;           ///< Coefficient de filtrage exponentiel (0-1)
+    
+    // Rendement faradique η (v1.3.0) — appliqué à l'intégration du courant
+    float _chargeEfficiency;      ///< η en charge à I_ref (0.5-1, défaut 1)
+    float _dischargeEfficiency;   ///< η en décharge à I_ref (0.5-1, défaut 1)
+    float _peukertN;              ///< Exposant de Peukert (<=1 ⇒ η constant)
+    float _peukertIref;           ///< Courant de référence de η (A)
+    float _appliedEfficiency;     ///< η de la dernière mesure (diagnostic)
     
     // États internes
     float _coulomb;                ///< Coulombs depuis la dernière remise à zéro
@@ -106,6 +123,11 @@ public:
      */
     Coulomb(float filterAlpha = 0.99) : 
         _filterAlpha(filterAlpha),
+        _chargeEfficiency(1.0f),
+        _dischargeEfficiency(1.0f),
+        _peukertN(1.0f),
+        _peukertIref(1.3f),
+        _appliedEfficiency(1.0f),
         _coulomb(0.0f),
         _coulombBase(0.0f),
         _coulombCumul(0.0f),
@@ -208,8 +230,17 @@ public:
         // Filtrer l'intervalle
         _avgIntervalSec = _filterAlpha * _avgIntervalSec + (1 - _filterAlpha) * intervalSec;
         
-        // Calculer les Coulombs pour cet intervalle (I × Δt)
-        float coulombDelta = currentAmps * intervalSec;
+        // Rendement faradique η (v1.3.0) — convention « η ∈ [0.5,1] » identique à
+        // AmpereHeure::variableEfficiency() : ΔC est RÉDUIT en magnitude, donc
+        // l'évolution du SoC est conservatrice (monte moins vite en charge, baisse
+        // moins vite en décharge). η=1 et n=1 (défaut) ⇒ intégration brute v1.2.1.
+        float eta = 1.0f;
+        if (currentAmps > 0.0f)      eta = getChargeEfficiency(currentAmps);
+        else if (currentAmps < 0.0f) eta = getDischargeEfficiency(currentAmps);
+        _appliedEfficiency = eta;
+
+        // Calculer les Coulombs pour cet intervalle (I × Δt × η)
+        float coulombDelta = currentAmps * intervalSec * eta;
         
         // Mettre à jour les cumuls
         _coulomb += coulombDelta;
@@ -352,6 +383,75 @@ public:
             _filterAlpha = alpha;
         }
     }
+
+    // ========== Rendement faradique η (v1.3.0) ==========
+
+    /**
+     * @brief Fixe les rendements de base (à I_ref), en charge et en décharge
+     * @param charge    η en charge (0-1). Plomb : 0.80-0.90.
+     * @param discharge η en décharge (0-1). Plomb : 0.99-1.00.
+     *
+     * Convention : η ≤ 1 réduit la charge intégrée (rendement faradique).
+     */
+    void setEfficiencies(float charge, float discharge) {
+        if (charge > 0.0f && charge <= 1.0f)      _chargeEfficiency = charge;
+        if (discharge > 0.0f && discharge <= 1.0f) _dischargeEfficiency = discharge;
+    }
+
+    /**
+     * @brief Exposant de Peukert pour la variation de η avec le courant
+     * @param n Exposant (1.0 = η constant ; plomb inondé 1.35-1.45)
+     */
+    void setPeukertExponent(float n) {
+        if (n > 0.0f) _peukertN = n;
+    }
+
+    /**
+     * @brief Courant de référence de la loi de Peukert (≈ C/20)
+     * @param iref_A Courant de référence en Ampères
+     */
+    void setPeukertReferenceRate(float iref_A) {
+        if (iref_A > 0.0f) _peukertIref = iref_A;
+    }
+
+    /**
+     * @brief η effectif en charge à un courant donné
+     * @param current Courant en Ampères (valeur absolue utilisée)
+     */
+    float getChargeEfficiency(float current) const {
+        return variableEfficiency(_chargeEfficiency, current);
+    }
+
+    /**
+     * @brief η effectif en décharge à un courant donné
+     * @param current Courant en Ampères (valeur absolue utilisée)
+     */
+    float getDischargeEfficiency(float current) const {
+        return variableEfficiency(_dischargeEfficiency, current);
+    }
+
+    /**
+     * @brief Loi de Peukert : η(I) = η_base · (I_ref / |I|)^(n−1), borné [0.5 ; 1]
+     *
+     * Identique à AmpereHeure::variableEfficiency() — même convention.
+     */
+    float variableEfficiency(float base, float current) const {
+        if (_peukertN <= 1.0f) return base;
+        float I = fabsf(current);
+        if (!isfinite(I) || I < 1e-3f) return base;
+        if (_peukertIref <= 0.0f) return base;
+        float eta = base * powf(_peukertIref / I, _peukertN - 1.0f);
+        if (eta > 1.0f) eta = 1.0f;
+        if (eta < 0.5f) eta = 0.5f;
+        return eta;
+    }
+
+    /// η appliqué lors de la dernière mesure (diagnostic)
+    float getAppliedEfficiency() const { return _appliedEfficiency; }
+    float getChargeEfficiencyBase() const { return _chargeEfficiency; }
+    float getDischargeEfficiencyBase() const { return _dischargeEfficiency; }
+    float getPeukertExponent() const { return _peukertN; }
+    float getPeukertReferenceRate() const { return _peukertIref; }
     
     /**
      * @brief Active/désactive le suivi des min/max

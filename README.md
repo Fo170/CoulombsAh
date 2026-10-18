@@ -186,7 +186,159 @@ Voir les exemples complets `exemples/Coulomb/` et `exemples/AmpereHeure/` (dépe
 - Configuration INA226 utilisée en matériel : adresse `0x40`, shunt `0.01 Ω`, courant max `4.0 A`.
 - Commentaires et sortie série rédigés en **français**.
 
-## Historique des versions
+## Évolutions et corrections — détail (quoi, pourquoi, formule)
+
+> Chaque entrée indique **ce qui était faux**, **pourquoi c'était faux** et **la formule exacte**
+> avant/après. Les sources utilisées pour trancher sont listées en fin de section (toutes
+> vérifiables, cf. [Sources](#sources-et-références)).
+
+### v1.3.1 — 2026-10-18 · η découplé de Peukert (correction de la 1.3.0)
+
+**Ce qui était faux.** La 1.3.0 appliquait la loi de Peukert comme rendement faradique :
+
+```
+η(I) = η_base · (I_ref / |I|)^(n−1)          borné à [0,5 ; 1]        ← FAUX
+```
+
+**Pourquoi c'était faux — deux défauts indépendants :**
+
+1. **Sens inversé en décharge.** La loi de Peukert décrit la **capacité disponible**, qui
+   **décroît** quand le courant augmente : `C(I) = C_nom · (I_ref/I)^(n−1)`. Il en découle que
+   les Ah **prélevés** à fort courant doivent être **amplifiés** (à 5 A on consomme plus de
+   capacité qu'à 0,5 A pour la même énergie). Utilisée comme rendement, la même loi **réduisait**
+   la décharge intégrée : avec `η_base = 1,00`, `I_ref = 1,30 A`, `n = 1,40`, à 5 A on obtenait
+   `η = 0,583` → la décharge n'était comptée qu'à **58 %**. Le SoC descendait donc **42 % trop
+   lentement** (biais optimiste : la batterie est plus vide qu'affiché — dangereux).
+2. **Écrêtage annulant le correctif en charge.** Avec `η_base = 0,90` (plomb), la loi vaut
+   `η = 0,90·(1,30/|I|)^0,40`. Elle dépasse 1,0 dès que
+   `|I| < I_ref · η_base^(1/(n−1)) = 1,30 · 0,90^2,5 ≈ 0,999 A`, donc l'écrêtage à 1,0 renvoyait
+   **exactement 1,000** pour tout `|I| ≲ 1 A` — c'est-à-dire précisément le régime de faible courant
+   que le correctif devait traiter. Seul le bulk (> 1 A) était affecté.
+
+**Ce qui a changé.** η est désormais **constant par direction**, sans lien avec Peukert :
+
+```
+η(I) = η_charge      si I > 0      (charge)
+η(I) = η_décharge    si I < 0      (décharge)
+η(I) = 1             si I = 0
+```
+
+Défauts : `η_charge = 1,0`, `η_décharge = 1,0` ⇒ intégration brute (rétrocompatible v1.2.1).
+Pour le plomb : `η_charge = 0,90`, `η_décharge = 1,00`.
+
+La loi de Peukert reste disponible là où elle est **physiquement juste** :
+`BatteryModel::getEffectiveCapacity(I)` et `updateCoulombCount()` (lib **BatteryModels**).
+
+**Autres correctifs de la même version :**
+
+| # | Défaut | Correctif |
+|---|---|---|
+| F14 | Aucune garde `isfinite()` sur le courant : un seul échantillon `NaN`/`Inf` (trame I²C corrompue) empoisonnait `_coulomb` **définitivement** (aucune réparation automatique) → `SoC_coulomb` → `SoC_fused` | `if (!isfinite(currentAmps)) return _coulombCumul;` en tête de `addMeasurementWithInterval()` |
+| F12 | `reset()` ne remettait ni `_appliedEfficiency` ni les moyennes → `getAppliedEfficiency()` renvoyait le η d'**avant** le reset (diagnostic faux) | `reset()` remet `_coulombPerSecond`, `_coulombPerSecondAvg`, `_currentAvg`, `_appliedEfficiency` |
+| F16 | `setPeukertExponent()` acceptait tout `n > 0` ; un `n < 1` **désactivait** la loi silencieusement | Borné à `[1.0, 2.0]`, aligné sur `BatteryModel::setPeukertExponent()` |
+
+### v1.3.0 — 2026-10-18 · η appliqué à l'intégration
+
+**Ce qui était faux.** `Coulomb::addMeasurementWithInterval()` intégrait le courant **brut** :
+
+```
+ΔC = I · Δt                                   ← avant la 1.3.0 (η = 1 implicite)
+```
+
+Le rendement faradique n'existait que dans `AmpereHeure.h` — **classe jamais instanciée** par le
+firmware Coulométre (qui utilise `Coulomb.h`). Conséquence mesurée sur l'appareil le 18/10/2026 :
+la charge solaire était comptée à 1:1 alors que le rendement réel du plomb vaut ~0,90, d'où une
+dérive du SoC de **+7 % par cycle** (84,3 % affiché contre 78,4 % réel).
+
+**Ce qui a changé.** `ΔC = I · Δt · η`, avec `setEfficiencies()` pour configurer η.
+
+### v1.2.1 — 2026-10-17 · macro de version
+
+Ajout de `__COULOMB_H_VERSION__` / `__AMPEREHEURE_H_VERSION__` : source **unique** de la version,
+agrégeable par un projet hôte (page `/version`).
+
+### v1.2.0 — 2026-10-17 · Peukert + η dans `AmpereHeure` (additif)
+
+Ajout de `setPeukertExponent()`, `setPeukertReferenceRate()`, `getChargeEfficiency(I)`,
+`getDischargeEfficiency(I)` dans `AmpereHeure.h`. `Coulomb.h` était **inchangé** — d'où le bug
+corrigé en 1.3.0.
+
+### v1.1.0 — 2026-10-17 · persistance externalisée (breaking)
+
+Persistance déléguée à [Fo170/Persistance](https://github.com/Fo170/Persistance) : suppression de
+`#include <EEPROM.h>`, du constructeur à adresse, de `save()`/`load()`/`resetComplete()`. Restauration
+via `setTotalCoulombs()` / `setTotalAh()`.
+
+### v1.0.0 — version initiale
+
+---
+
+## Formules exactes (référence)
+
+Convention de signe : **`I > 0` = charge**, `I < 0` = décharge.
+
+### 1. Intervalle de temps (`calculateInterval`)
+
+```
+Δt_k = (t_k − t_{k−1}) · 10⁻⁶   [s]                    si t_k ≥ t_{k−1}
+Δt_k = (ULONG_MAX − t_{k−1} + t_k + 1) · 10⁻⁶   [s]    si t_k < t_{k−1}  (wrap de micros(), ~71,6 min)
+```
+
+Garde : `0 < Δt ≤ 3600 s` sinon l'échantillon est ignoré.
+
+### 2. Filtrage exponentiel (moyennes, non utilisé pour l'intégration)
+
+```
+Ī_k      = α · Ī_{k−1}      + (1 − α) · I_k
+Δt̄_k     = α · Δt̄_{k−1}     + (1 − α) · Δt_k
+```
+`α` = `_filterAlpha` (défaut 0,99 ; plus proche de 1 = plus lissé). `α` est appliqué aux
+**moyennes** ; l'intégration utilise toujours le courant et l'intervalle **instantanés**.
+
+### 3. Rendement faradique
+
+```
+η = η_charge    si I > 0
+η = η_décharge  si I < 0
+η = 1           si I = 0
+```
+`η_charge`, `η_décharge` ∈ ]0 ; 1], configurés par `setEfficiencies()`. Valeurs constantes :
+η ne dépend **pas** du courant (cf. v1.3.1).
+
+### 4. Intégration (coulombs)
+
+```
+ΔC_k     = I_k · Δt_k · η(I_k)          [C]
+C_k      = C_base + Σ ΔC_k              [C]
+Ah_k     = C_k / 3600                   [Ah]
+```
+
+### 5. Loi de Peukert — **dans `BatteryModel`, pas ici**
+
+```
+C_eff(I) = C_nom · (I_ref / |I|)^(n−1)      si |I| ≥ 0,01 A et n > 1
+C_eff(I) = C_nom                            sinon
+```
+Ce facteur est **> 1** : la capacité disponible **diminue** à fort courant. Il ne doit jamais être
+appliqué comme rendement (cf. v1.3.1).
+
+---
+
+## Sources et références
+
+Consultées le **2026-10-18**. Toutes répondent HTTP 200 à cette date.
+
+| Sujet | Source | Ce qui en est tiré |
+|---|---|---|
+| Loi de Peukert | [Wikipedia — Peukert's law](https://en.wikipedia.org/wiki/Peukert%27s_law) | `C/C₀ = (I₀/I)^(k−1)` ; la capacité **disponible décroît** avec le courant ⇒ justifie de ne PAS utiliser Peukert comme rendement (v1.3.1, défaut n°1) |
+| Rendement faradique | [Wikipedia — Faraday efficiency](https://en.wikipedia.org/wiki/Faraday_efficiency) | η = rapport des charges échangées sur un cycle (grandeur **constante par direction**, pas un facteur dépendant de `I`) |
+| Rendement coulombique du plomb | [Battery University — BU-808c](https://batteryuniversity.com/article/bu-808c-coulombic-and-energy-efficiency-with-the-battery) | Plomb : CE ≈ **90 %** ; un courant très faible **abaisse** le rendement (auto-décharge) — il ne remonte pas à 100 % ⇒ justifie le défaut n°2 de la v1.3.1 |
+| Charge du plomb | [Battery University — BU-403](https://batteryuniversity.com/article/bu-403-charging-lead-acid) | Rendement élevé « with sufficient charge current », dégradé à faible courant ⇒ même conclusion |
+| Batterie plomb-acide | [Wikipedia — Lead–acid battery](https://en.wikipedia.org/wiki/Lead%E2%80%93acid_battery) | Ordres de grandeur (rendement, tensions par cellule) |
+
+---
+
+## Historique synthétique des versions
 
 | Version | Changement majeur |
 |---|---|

@@ -1,6 +1,6 @@
 {
   "name": "CoulombsAh",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Librairies header-only pour coulomètre ESP8266 : comptage en Coulombs (Coulomb.h) et en Ampères-heures avec état de charge batterie (AmpereHeure.h). v1.3.0 : rendement η APPLIQUÉ à l'intégration par Coulomb.h (setEfficiencies/setPeukertExponent, ΔC = I·Δt·η(I)). v1.2.0 : Peukert dynamique + rendement η variable dans AmpereHeure.h. v1.1.0 : persistance déléguée à Fo170/Persistance (EEPROM/FRAM/LittleFS) — suppression de la persistance EEPROM interne (setTotalCoulombs()/setTotalAh() pour la restauration).",
   "keywords": "coulomb, ampere-heure, ampere-hours, batterie, battery, soc, coulomètre, coulombmeter, esp8266, ina226, persistance",
   "authors": [

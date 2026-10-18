@@ -25,6 +25,14 @@
  * Fo170/Persistance : on restaure via setTotalCoulombs() et on sauvegarde
  * via getTotalCoulombs() (ou getCoulombs()).
  * 
+ * v1.3.1 (18/10/2026) : η DÉCOUPLÉ de Peukert. La loi η_base·(I_ref/|I|)^(n−1)
+ *   appliquée en décharge INVERSAIT le sens de Peukert (décharge comptée à 58 %
+ *   à 5 A) et son écrêtage à 1.0 l'annulait en charge pour |I| ≤ ~1 A — soit le
+ *   régime même qu'elle devait corriger. η est désormais CONSTANT par direction
+ *   (charge 0,90 / décharge 1,00) ; la correction de Peukert reste dans
+ *   `BatteryModel::getEffectiveCapacity(I)`, où elle est physiquement juste.
+ *   + garde isfinite sur le courant (F14) + reset() complet (F12).
+ * 
  * v1.3.0 (18/10/2026) : rendement faradique η APPLIQUÉ À L'INTÉGRATION.
  *   Avant, `addMeasurement()` intégrait le courant brut (η=1 implicite) : la
  *   charge solaire était comptée à 1:1 alors que le rendement réel d'une
@@ -43,7 +51,7 @@
 #define COULOMB_H
 
 // Version de la librairie (source UNIQUE — agrégée par src/liste_lib.h)
-#define __COULOMB_H_VERSION__ "1.3.0"
+#define __COULOMB_H_VERSION__ "1.3.1"
 
 #include <Arduino.h>
 #include <climits>
@@ -220,6 +228,11 @@ public:
         if (intervalSec <= 0 || intervalSec > 3600) { // Max 1 heure
             return _coulombCumul;
         }
+
+        // v1.3.1 (F14) : un seul échantillon NaN/Inf empoisonnait DÉFINITIVEMENT
+        // _coulomb (aucune réparation automatique) → SoC_coulomb → SoC_fused.
+        // L'INA226 peut renvoyer NaN si la trame I²C est corrompue.
+        if (!isfinite(currentAmps)) return _coulombCumul;
         
         // Mise à jour des statistiques
         _sampleCount++;
@@ -230,10 +243,12 @@ public:
         // Filtrer l'intervalle
         _avgIntervalSec = _filterAlpha * _avgIntervalSec + (1 - _filterAlpha) * intervalSec;
         
-        // Rendement faradique η (v1.3.0) — convention « η ∈ [0.5,1] » identique à
-        // AmpereHeure::variableEfficiency() : ΔC est RÉDUIT en magnitude, donc
-        // l'évolution du SoC est conservatrice (monte moins vite en charge, baisse
-        // moins vite en décharge). η=1 et n=1 (défaut) ⇒ intégration brute v1.2.1.
+        // Rendement faradique η (v1.3.1) — CONSTANT par direction, indépendant du
+        // courant. En charge, η ≤ 1 réduit la charge intégrée (pertes de
+        // conversion/gassing) : le SoC monte moins vite. En décharge, η = 1.0
+        // (défaut) ⇒ intégration telle que mesurée — NE PAS descendre sous 1.0,
+        // cela ferait baisser le SoC trop lentement (biais optimiste).
+        // η=1 partout (défaut) ⇒ intégration brute v1.2.1.
         float eta = 1.0f;
         if (currentAmps > 0.0f)      eta = getChargeEfficiency(currentAmps);
         else if (currentAmps < 0.0f) eta = getDischargeEfficiency(currentAmps);
@@ -274,6 +289,12 @@ public:
         _coulombBase = 0.0f;
         _coulombCumul = 0.0f;
         _sampleCount = 0;
+        // v1.3.1 (F12) : les moyennes et le diagnostic η n'étaient pas remis à zéro
+        // → getAppliedEfficiency() renvoyait le η d'AVANT le reset (diagnostic faux).
+        _coulombPerSecond = 0.0f;
+        _coulombPerSecondAvg = 0.0f;
+        _currentAvg = 0.0f;
+        _appliedEfficiency = 1.0f;
         
         // Réinitialiser les stats
         if (_trackMinMax) {
@@ -399,11 +420,15 @@ public:
     }
 
     /**
-     * @brief Exposant de Peukert pour la variation de η avec le courant
-     * @param n Exposant (1.0 = η constant ; plomb inondé 1.35-1.45)
+     * @brief Exposant de Peukert — DÉPRÉCIÉ (conservé pour compat API)
+     *
+     * Depuis la v1.3.1, le rendement η ne dépend plus du courant : cet exposant
+     * n'a plus d'effet sur l'intégration. La loi de Peukert est appliquée par
+     * `BatteryModel::getEffectiveCapacity(I)` (capacité effective), où elle est
+     * physiquement correcte.
      */
     void setPeukertExponent(float n) {
-        if (n > 0.0f) _peukertN = n;
+        if (isfinite(n) && n >= 1.0f && n <= 2.0f) _peukertN = n;
     }
 
     /**
@@ -415,35 +440,55 @@ public:
     }
 
     /**
-     * @brief η effectif en charge à un courant donné
-     * @param current Courant en Ampères (valeur absolue utilisée)
+     * @brief Rendement faradique en charge — CONSTANT (indépendant du courant)
+     *
+     * v1.3.1 : le rendement ne dépend PLUS de la loi de Peukert. Deux raisons :
+     *
+     * 1. **Sens physique inversé en décharge.** Peukert décrit la CAPACITÉ
+     *    DISPONIBLE, qui décroît avec |I| : les Ah prélevés doivent être
+     *    AMPLIFIÉS par (|I|/I_ref)^(n−1) ≥ 1. Appliquée comme rendement, la
+     *    même loi RÉDUISAIT la décharge (58 % à 5 A au lieu de 100 %) → le SoC
+     *    descendait 42 % trop lentement (biais optimiste, dangereux).
+     * 2. **Écrêtage qui annulait le correctif.** η_base·(I_ref/|I|)^(n−1)
+     *    écrêté à 1.0 vaut exactement 1.0 pour |I| ≤ I_ref/η_base^(1/(n−1))
+     *    ≈ 1 A — soit précisément le régime de faible courant que la v1.3.0
+     *    prétendait corriger. Seul le bulk solaire (> 1 A) était affecté.
+     *
+     * Références : « Faraday efficiency » (Wikipedia) — η est le rapport des
+     * charges échangées sur un cycle, pas un facteur de Peukert ;
+     * BU-808c et BU-403 (Battery University) — le rendement coulombique du
+     * plomb vaut ~90 % et DIMINUE à très faible courant (auto-décharge), il ne
+     * remonte pas à 100 %. La correction de Peukert reste disponible là où elle
+     * est juste : `BatteryModel::getEffectiveCapacity(I)` / `updateCoulombCount`.
+     *
+     * @param current Courant en A (ignoré — signature conservée pour compat)
      */
     float getChargeEfficiency(float current) const {
-        return variableEfficiency(_chargeEfficiency, current);
+        (void)current;
+        return _chargeEfficiency;
     }
 
     /**
-     * @brief η effectif en décharge à un courant donné
-     * @param current Courant en Ampères (valeur absolue utilisée)
+     * @brief Rendement faradique en décharge — CONSTANT (voir getChargeEfficiency)
+     *
+     * Défaut 1.0 : la décharge est intégrée telle que mesurée. Une valeur < 1
+     * réduirait la décharge (le SoC descendrait trop lentement) → ne pas
+     * descendre sous 1.0 sans justification physique.
      */
     float getDischargeEfficiency(float current) const {
-        return variableEfficiency(_dischargeEfficiency, current);
+        (void)current;
+        return _dischargeEfficiency;
     }
 
     /**
-     * @brief Loi de Peukert : η(I) = η_base · (I_ref / |I|)^(n−1), borné [0.5 ; 1]
+     * @brief Loi de Peukert sur le rendement — DÉPRÉCIÉE, conservée pour compat.
      *
-     * Identique à AmpereHeure::variableEfficiency() — même convention.
+     * N'est plus utilisée par `getChargeEfficiency()`/`getDischargeEfficiency()`
+     * depuis la v1.3.1 (cf. justification ci-dessus). Renvoie `base` tel quel.
      */
     float variableEfficiency(float base, float current) const {
-        if (_peukertN <= 1.0f) return base;
-        float I = fabsf(current);
-        if (!isfinite(I) || I < 1e-3f) return base;
-        if (_peukertIref <= 0.0f) return base;
-        float eta = base * powf(_peukertIref / I, _peukertN - 1.0f);
-        if (eta > 1.0f) eta = 1.0f;
-        if (eta < 0.5f) eta = 0.5f;
-        return eta;
+        (void)current;
+        return base;
     }
 
     /// η appliqué lors de la dernière mesure (diagnostic)

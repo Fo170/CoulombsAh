@@ -1,240 +1,195 @@
 # CoulombsAh
 
-Librairies **header-only** pour un coulomètre sur ESP8266 (WeMos D1 Mini), typiquement associées à un capteur de courant INA226.
+Compteur de charge **fusionnel Coulombs/Ah** pour ESP8266, à **grande dynamique**.
 
-Version **2.0.0** · Licence **GPL-3.0** · Auteur : Olivier FOURNET (olivier.fournet@free.fr) · Dépôt : [github.com/Fo170/CoulombsAh](https://github.com/Fo170/CoulombsAh)
+Version **3.0.1** · Licence **GPL-3.0** · Auteur : Olivier FOURNET (olivier.fournet@free.fr) · Dépôt : [github.com/Fo170/CoulombsAh](https://github.com/Fo170/CoulombsAh)
 
-> ## ⚠️ Principe depuis la 2.0.0 : ces librairies ne font que COMPTER
+> ## Un seul compteur, exact quelle que soit la magnitude
 >
-> `Coulomb` et `AmpereHeure` sont des **intégrateurs purs**. Ils ne contiennent
-> **aucune physique** : ni rendement faradique η, ni Peukert, ni état de charge,
-> ni capacité batterie, ni autonomie, ni dégagement gazeux.
+> Depuis la **3.0.0**, `CoulombsAh.h` **remplace** `Coulomb.h` et
+> `AmpereHeure.h`. Coulombs et ampères-heures sont la **même grandeur** à un
+> facteur 3600 près : un seul accumulateur les porte, et il doit être exact.
 >
-> Toute politique est une décision du **projet** qui utilise la librairie. Dans
-> le dépôt du Coulométre, elle vit dans `src/Coulomb_fct.h` (η + gazage) et
-> `src/Ah_fct.h` (Peukert + accumulateur à deux étages).
+> **Le problème résolu.** Un `float32` ne peut pas incrémenter une grande valeur
+> par petits pas — l'ULP croît avec la magnitude :
 >
-> ```cpp
-> // La librairie fait ceci, et rien d'autre :
-> ΔC  = I · Δt            // Coulomb::addMeasurementWithInterval()
-> ΔAh = I · Δt / 3600     // AmpereHeure::addMeasurementWithInterval()
+> | `Ah_total` | ULP float32 | Incrément 0,1 A × 0,1 s | Conservé ? |
+> |---|---|---|---|
+> | 26 Ah | 1,91e-06 Ah | 2,78e-06 Ah | oui (1,5 ULP) |
+> | **100 Ah** | **7,63e-06 Ah** | 2,78e-06 Ah | **non** |
+> | **910 Ah** | **6,10e-05 Ah** | 2,78e-06 Ah | **non (22× sous l'ULP)** |
+> | 10 000 Ah | 9,77e-04 Ah | 2,78e-06 Ah | non (350× sous l'ULP) |
 >
-> // Le projet pondère s'il le souhaite :
-> coulomb.addMeasurement(I * eta);
-> ```
+> Sur 10 000 000 d'échantillons (exact 27,777778 Ah), un cumul `float32` donne
+> **26,578040 Ah, soit −1,20 Ah (−4,3 %)**.
 >
-> Voir la section **[Migration 1.x → 2.0.0](#migration-1x--200)** : l'API a
-> changé de façon incompatible.
+> **La solution : deux étages** (principe de l'odomètre).
+>
+> | Étage | Type | Rôle |
+> |---|---|---|
+> | BAS | `int64_t` µC, borné à [0 ; 1 Ah[ | reste fractionnaire, **précis** (1 µC = 2,78e-10 Ah) |
+> | HAUT | `int64_t` Ah | compteur entier, **aucune perte d'unité** |
+> | REPORT | automatique à 1 Ah | le reste ne dépasse jamais 1 Ah |
+>
+> Lecture : `Ah_total = Ah_entier + reste_µC / 3,6e9`
+>
+> Résultat mesuré : **27,777778 Ah** (erreur 1,9e-06 Ah).
+>
+> `CoulombsAh` est un **intégrateur PUR** : aucune physique (ni rendement
+> faradique, ni Peukert, ni état de charge, ni capacité batterie). Ces
+> politiques appartiennent au projet qui utilise la librairie.
 
 ## Contenu
 
 | Classe | Fichier | Rôle |
 |---|---|---|
-| `Coulomb` | `src/Coulomb.h` | Intègre et cumule la charge électrique en **Coulombs** (1 C = 1 A·s) |
-| `AmpereHeure` | `src/AmpereHeure.h` | Intègre et cumule la capacité en **Ampères-heures** (1 Ah = 3600 C) |
+| `Ah_GD` | `src/CoulombsAh.h` | Accumulateur de charge à **deux étages** : coulombs **et** ampères-heures, exact quelle que soit la magnitude |
+
+Un seul header, une seule classe. `Coulomb.h` et `AmpereHeure.h` ont été
+supprimés en 3.0.0.
 
 ---
 
-## `Coulomb`
-
-### Intégration
-
-```
-ΔC = I · Δt
-```
-
-Aucun rendement n'est appliqué. Le courant est intégré tel que mesuré, dans les
-deux sens (charge positive, décharge négative).
+## Utilisation
 
 ```cpp
-#include "Coulomb.h"
+#include "CoulombsAh.h"
 
-Coulomb coulomb;
+Ah_GD ah;
 
-void setup() { coulomb.begin(); }
+void setup() { }
 
 void loop() {
-    float I = lireCourant();                 // A, > 0 = charge
-    coulomb.addMeasurement(I);               // timestamp = micros()
-    // ou, si l'intervalle est connu :
-    coulomb.addMeasurementWithInterval(I, 0.1f);
+    float I  = lireCourant();       // A, > 0 = charge
+    float dt = 0.1f;                // s — le projet fournit le pas de temps
+
+    ah.addCoulombs(I * dt);         // ou ah.addAmpereHours(I * dt / 3600.0f)
 }
 ```
 
-### Injection d'une charge déjà intégrée
-
-```cpp
-float addCharge(float coulombsDelta);        // signé : < 0 = décharge
-```
-
-Utile quand le projet calcule lui-même son incrément (rendement, Peukert,
-gazage…) sans passer par un courant. Ne touche ni `getCurrent()` ni l'horloge
-interne — aucune notion de temps. Les NaN/Inf sont rejetés.
-
-### API
-
-| Méthode | Rôle |
-|---|---|
-| `begin(initialCoulomb = 0, resetTimestamp = true)` | Initialise |
-| `addMeasurement(I)` | Intègre avec `micros()` |
-| `addMeasurement(I, microsTimestamp)` | Intègre avec horodatage explicite |
-| `addMeasurementWithInterval(I, dt_s)` | Intègre sur un intervalle donné (0 < Δt ≤ 3600 s) |
-| `addCharge(dC)` | Ajoute une charge déjà intégrée |
-| `reset()` / `reset(bool)` | Remet à zéro |
-| `setTotalCoulombs(C)` | Fixe la **base** (persistance) ; l'intégration s'y ajoute |
-| `getCoulombs()` | Coulombs depuis le dernier reset |
-| `getTotalCoulombs()` | Base + intégration |
-| `getAmpereHours()` | `getTotalCoulombs() / 3600` |
-| `getAmpereHoursSinceReset()` | `getCoulombs() / 3600` |
-| `getCoulombsPerSecond()` / `getAverageCoulombsPerSecond()` | Débit instantané / lissé |
-| `getCurrent()` / `getAverageCurrent()` | Courant brut / lissé |
-| `getLastInterval()` / `getAverageInterval()` | Intervalles |
-| `getSampleCount()` | Nombre d'échantillons |
-| `getMaxCoulombs()` / `getMinCoulombs()` | Bornes (si `enableMinMaxTracking(true)`) |
-| `setFilterAlpha(α)` | Coefficient EMA du courant (0–1) |
-| `enableMinMaxTracking(bool)` | Active le suivi min/max |
-| `setAverageCurrent(I)` | Force le courant moyen lissé |
-| `printDebug()` | État interne sur le port série |
-
-### Garde-fous
-
-- **Δt hors `]0 ; 3600]`** rejeté (pas d'intégration).
-- **`I` = NaN ou ±Inf** rejeté : un seul échantillon corrompu (trame I²C)
-  empoisonnerait définitivement le cumul.
-- **Débordement de `micros()`** (~70 min) géré dans `calculateInterval()`.
+Le compteur **n'a pas d'horloge interne** : il reçoit une charge déjà intégrée.
+C'est le projet qui décide du `dt`, du rendement, et de tout le reste.
 
 ---
 
-## `AmpereHeure`
+## API
 
-### Intégration
+### Entrées
 
-```
-ΔAh = I · Δt / 3600
-```
-
-Cumuls séparés **chargé** (`getTotalCharged()`) et **déchargé**
-(`getTotalDischarged()`), tous deux positifs.
-
-```cpp
-#include "AmpereHeure.h"
-
-AmpereHeure ah;
-
-void setup() { ah.begin(); }
-
-void loop() {
-    ah.addMeasurement(lireCourant());
-}
-```
-
-### API
-
-| Méthode | Rôle |
-|---|---|
-| `begin(initialAh = 0)` | Initialise |
-| `addMeasurement(I)` / `addMeasurement(I, microsTimestamp)` | Intègre |
-| `addMeasurementWithInterval(I, dt_s)` | Intègre sur un intervalle |
-| `addCharge(ahDelta)` | Ajoute des Ah déjà intégrés (signés) |
-| `reset()` / `reset(bool)` | Remet à zéro |
-| `setTotalAh(ah)` | Fixe la **base** (persistance) |
-| `getAh()` / `getTotalAh()` | Session / base + session |
-| `getTotalCharged()` / `getTotalDischarged()` | Cumuls par sens (positifs) |
-| `getCurrent()` / `getAverageCurrent()` | Courant |
-| `getCurrentDirection()` | `1` charge, `−1` décharge, `0` repos |
-| `isCharging()` / `isDischarging()` | Seuil ±100 mA |
-| `getLastInterval()` / `getAverageInterval()` / `getSampleCount()` | Diagnostic |
-| `getMaxAh()` / `getMinAh()` | Bornes |
-| `setFilterAlpha(α)` | Coefficient EMA |
-| `printDebug()` | État interne sur le port série |
-
----
-
-## ⚠️ Précision : pourquoi `float` ne suffit pas pour un grand total
-
-Un `float` 32 bits ne peut pas incrémenter par petits pas une grande valeur.
-L'ULP (plus petit incrément représentable) croît avec la magnitude :
-
-| `Ah_total` | ULP float32 | Incrément 0,1 A × 0,1 s | Incrément conservé ? |
-|---|---|---|---|
-| 1 Ah | 1,19e-07 Ah | 2,78e-06 Ah | oui |
-| 26 Ah | 1,91e-06 Ah | 2,78e-06 Ah | oui (1,5 ULP, limite) |
-| **100 Ah** | **7,63e-06 Ah** | 2,78e-06 Ah | **non** |
-| **910 Ah** | **6,10e-05 Ah** | 2,78e-06 Ah | **non** (22× sous l'ULP) |
-| 10 000 Ah | 9,77e-04 Ah | 2,78e-06 Ah | non (350× sous l'ULP) |
-
-Simulation de 10 000 000 échantillons (0,1 A × 0,1 s), exact = 27,777778 Ah :
-
-| Schéma | Résultat | Erreur |
+| Méthode | Unité | Remarque |
 |---|---|---|
-| float32 non borné | 26,578040 Ah | **−1,20 Ah (−4,3 %)** |
-| entier Ah + reste borné à 1 Ah | 27,777778 Ah | **0** |
+| `addMicroCoulombs(int64_t dUc)` | µC | **unité native**, aucune conversion, aucune perte |
+| `addCoulombs(float dC)` | C | arrondi au µC le plus proche, résidu conservé |
+| `addAmpereHours(float dAh)` | Ah | idem, avec **sa propre borne** (voir plus bas) |
 
-**Solution recommandée** (implémentée dans `Ah_fct.h` du projet Coulométre) :
-compteur à **deux étages**, principe de l'odomètre.
+Toutes acceptent des valeurs **signées** : `< 0` alimente le compteur de
+décharge. NaN/Inf sont rejetés.
 
-```
-Étage BAS  : reste en micro-coulombs, int64, borné à ±3,6e9 (1 Ah)
-             → petit, donc précis (1 µC = 2,8e-10 Ah)
-Étage HAUT : Ah ENTIERS, int64
-             → aucune perte : ajouter 1 à 910 donne 911 exactement
-REPORT     : dès que |reste| ≥ 3,6e9 µC, on transfère 1 Ah vers l'étage haut
-Lecture    : Ah_total = Ah_entier + reste / 3,6e9
-```
+### Lecture
 
-Cette logique n'est **pas** dans la librairie : c'est une politique de
-représentation, donc du ressort du projet.
+| Méthode | Retour | Remarque |
+|---|---|---|
+| `getAhNet()` | `float` Ah | net = (chargé + fChg) − (déchargé + fDis) |
+| `getAhCharged()` / `getAhDischarged()` | `float` Ah | cumuls **bruts**, toujours ≥ 0 |
+| `getAhFractionChg()` / `getAhFractionDis()` | `float` Ah | restes, chacun dans [0 ; 1[ |
+| **`getNetMicroCoulombs()`** | `int64_t` µC | **EXACT — à utiliser pour les différences** |
+| `getNetCoulombs()` | `float` C | affichage |
+| `isEmpty()` | `bool` | aucun Ah accumulé |
+
+### Persistance
+
+| Méthode | Remarque |
+|---|---|
+| `serialize(chg, dis, ucChg, ucDis)` | 4 × `uint32`, saturation **explicite** |
+| `deserialize(chg, dis, ucChg, ucDis)` | bornes vérifiées au chargement |
+| `reset()` | tout à zéro |
+
+`SER_LEN = 16` octets. Les compteurs entiers sont saturés à 4,29e9 Ah (au-delà,
+la vie de l'installation est terminée) ; les restes tiennent intégralement sur
+32 bits par construction, donc **aucun masque** n'est appliqué à la relecture.
 
 ---
 
-## Migration 1.x → 2.0.0
+## ⚠️ Pourquoi `getNetMicroCoulombs()` existe
 
-### `Coulomb`
-
-| Avant (1.3.x) | Après (2.0.0) |
-|---|---|
-| `setEfficiencies(c, d)` | supprimé → pondérer `I` avant l'appel, ou utiliser `CoulombFct` |
-| `getChargeEfficiency(I)` / `getDischargeEfficiency(I)` | supprimés |
-| `getChargeEfficiencyBase()` / `getDischargeEfficiencyBase()` | supprimés |
-| `getAppliedEfficiency()` | supprimé |
-| `setPeukertExponent()` / `setPeukertReferenceRate()` + getters | supprimés |
-| `variableEfficiency(base, I)` | supprimé |
-| `setGassingModel(...)`, `setBatteryVoltage(...)`, `getGassingThreshold()`, `getGassingCurrent()`, `isGassingModelEnabled()`, `getGassingIRef()` | supprimés |
-| — | **`addCharge(dC)` ajouté** |
+Soustraire deux `getAhNet()` en `float32` **perd le delta**. À 910 Ah l'ULP vaut
+6,1e-05 Ah, soit 22× l'incrément d'un échantillon de 0,1 s (2,78e-06 Ah) : la
+différence est arrondie à zéro.
 
 ```cpp
-// AVANT
-Coulomb c;
-c.setEfficiencies(0.90f, 1.00f);
-c.setGassingModel(true, 2.35f, 11.7f, 0.45f, 6.0f, -0.005f);
-c.setBatteryVoltage(V, T);
-c.addMeasurement(I);
+// ❌ FAUX à grande magnitude
+float dAh = ah.getAhNet() - last_Ah;
 
-// APRÈS — soit on pondère soi-même :
-Coulomb c;
-float eta = monRendement(V, I, T);     // politique du projet
-c.addMeasurement(I * eta);
-
-// …soit on utilise la façade du projet (CoulombFct) :
-f.addSample(I, V, T, dt_s);
+// ✅ EXACT
+int64_t dUc = ah.getNetMicroCoulombs() - last_Uc;
+last_Uc = ah.getNetMicroCoulombs();
+float dAh = (float)dUc / 3.6e9f;      // petit delta → float32 précis
 ```
 
-### `AmpereHeure`
+**Mesuré** : sur 3600 pas de 0,1 s à −0,5 A depuis 910 Ah,
 
-Le constructeur ne prend plus la capacité : `AmpereHeure(float filterAlpha = 0.99)`.
+| Méthode | Résultat | Erreur |
+|---|---|---|
+| cumul `float32` | 910,000000 Ah | **+0,049988 Ah perdus** |
+| delta `int64` µC | 909,950012 Ah | **−0,0005 pt de SoC** |
 
-| Avant (1.2.x) | Après (2.0.0) |
+---
+
+## Deux compteurs BRUTS, deux restes
+
+Une version antérieure n'avait qu'**un seul** reste signé : les compteurs ne
+s'incrémentaient donc que sur le **solde net**. Un cycle de (+0,5 / −0,4) Ah
+répété 10 fois donnait 1,0 / 0,0 au lieu de **5,0 / 4,0** — tout aller-retour
+sous 1 Ah était invisible.
+
+Depuis, l'aiguillage se fait sur le **signe de l'incrément** :
+
+| Incrément | Reste alimenté | Compteur reporté |
+|---|---|---|
+| `> 0` | `ucRestChg` | `ahCharged` |
+| `< 0` | `ucRestDis` (valeur absolue) | `ahDischarged` |
+
+Les deux compteurs sont donc des cumuls **bruts indépendants** ; le net se
+calcule par différence.
+
+---
+
+## ⚠️ Bornes de magnitude
+
+Les bornes protègent contre le **comportement indéfini** du cast `float → int64`
+au-delà d'`INT64_MAX` (9,22e18 µC) :
+
+| Entrée | Borne | Justification |
+|---|---|---|
+| `addCoulombs(dC)` | **1e12 C** | dC × 1e6 < INT64_MAX ; calibrée pour un **échantillon** |
+| `addAmpereHours(dAh)` | **1e9 Ah** | dAh × 3,6e9 < INT64_MAX |
+
+⚠️ **`addAmpereHours()` n'appelle PAS `addCoulombs()`** : une restauration
+légitime de 910 Ah vaut 3,276e6 C et serait écrêtée par la borne « échantillon ».
+C'était un bug de la 3.0.0, corrigé en **3.0.1** (`addAmpereHours(910)` donnait
+277,78 Ah au lieu de 910 Ah).
+
+---
+
+## Migration 2.x → 3.0.0
+
+| Avant (2.x) | Après (3.0.0) |
 |---|---|
-| `AmpereHeure(float cap, float alpha)` | `AmpereHeure(float alpha = 0.99)` |
-| `setBatteryCapacity()` / `getBatteryCapacity()` | supprimés |
-| `setEfficiencies()` / `getChargeEfficiency()` / `getDischargeEfficiency()` | supprimés |
-| `setPeukertExponent()` / `setPeukertReferenceRate()` + getters | supprimés |
-| `getStateOfCharge()` / `getStateOfChargePercent()` / `calibrateStateOfCharge()` | supprimés |
-| `getRemainingCapacity()` / `setLowBatteryThreshold()` / `isLowBattery()` | supprimés |
-| `getEstimatedCycles()` / `getEstimatedRuntimeHours()` / `getEstimatedRuntimeFormatted()` | supprimés |
-| `getPower(V)` | supprimé |
-| `begin(initialAh, initialSoC)` | `begin(initialAh = 0)` |
-| — | **`addCharge(ahDelta)` ajouté** |
+| `#include "Coulomb.h"` + `Coulomb` | `#include "CoulombsAh.h"` + `Ah_GD` |
+| `#include "AmpereHeure.h"` + `AmpereHeure` | idem |
+| `addMeasurement(I)` / `addMeasurementWithInterval(I, dt)` | `addCoulombs(I * dt)` |
+| `addCharge(dC)` | `addCoulombs(dC)` |
+| `getTotalCoulombs()` / `getCoulombs()` | `getNetCoulombs()` / `getNetMicroCoulombs()` |
+| `getAmpereHours()` | `getAhNet()` |
+| `getLastInterval()` | supprimé — le projet fournit le `dt` |
+| `getSampleCount()`, EMA, min/max | supprimés (inutilisés, et ce n'est pas du comptage) |
+| `__COULOMB_H_VERSION__` | `__COULOMBSAH_H_VERSION__` |
+
+### Migration 1.x → 2.0.0 (historique)
+
+La 2.0.0 avait déjà retiré toute la physique des deux compteurs (rendement
+faradique, Peukert, SoC, capacité, autonomie, dégagement gazeux). Voir le
+CHANGELOG.
 
 ---
 
@@ -257,7 +212,10 @@ Consultées le **2026-10-19**. Toutes répondent HTTP 200 à cette date.
 
 | Version | Changement majeur |
 |---|---|
-| **2.0.0** | **RUPTURE** — les deux libs redeviennent des **intégrateurs purs**. Toute la physique (η, Peukert, SoC, capacité, autonomie, gazage) est supprimée et migre dans le projet. Ajout de `addCharge()`. |
+| **3.0.1** | `addAmpereHours()` avait la borne « échantillon » de `addCoulombs()` → une restauration de 910 Ah était écrêtée à 277,78 Ah. Borne propre en Ah. |
+| **3.0.0** | **RUPTURE** — `Coulomb.h` et `AmpereHeure.h` **remplacés** par un compteur unique et fusionnel `Ah_GD` (`CoulombsAh.h`) : deux étages (Ah entiers `int64` + reste µC `int64`), compteurs bruts, persistance 4 × `uint32`. Le `dt` n'est plus du ressort du compteur. |
+| 2.0.1 | `getLastInterval()` n'était pas mis à jour par `addMeasurementWithInterval()` → pas de temps du modèle 100× trop petit. |
+| 2.0.0 | **RUPTURE** — les deux libs redeviennent des **intégrateurs purs**. Toute la physique (η, Peukert, SoC, capacité, autonomie, gazage) est supprimée et migre dans le projet. |
 | 1.3.1 | η découplé de Peukert (constant par direction) ; garde `isfinite` ; `reset()` complet ; `setPeukertExponent` borné `[1.0, 2.0]` |
 | 1.3.0 | η appliqué à l'intégration par `Coulomb` (auparavant seul `AmpereHeure` en avait un) |
 | 1.2.0 | Peukert dynamique + rendement η variable dans `AmpereHeure` |

@@ -1,49 +1,50 @@
 /**
  * @file Coulomb.h
- * @brief Librairie pour le comptage de Coulombs (charge électrique)
- * 
- * Classe unique pour mesurer et cumuler la charge électrique en Coulombs
- * à partir de mesures de courant et d'intervalles de temps.
- * 
+ * @brief Compteur de Coulombs — intégrateur PUR.
+ *
+ * Mesure et cumule la charge électrique en Coulombs (1 C = 1 A × 1 s) à partir
+ * de mesures de courant et d'intervalles de temps.
+ *
+ * ⚠️ PRINCIPE (v2.0.0) — CETTE LIBRAIRIE NE FAIT QUE COMPTER.
+ * Aucune physique n'y est implémentée : ni rendement faradique η, ni Peukert,
+ * ni état de charge (SoC), ni dégagement gazeux. Ces politiques appartiennent
+ * au PROJET qui utilise la librairie (cf. `src/Coulomb_fct.h` et `src/Ah_fct.h`
+ * du dépôt Coulométre). Toute méthode de politique a été SUPPRIMÉE en 2.0.0 :
+ *
+ *   setEfficiencies, getChargeEfficiency, getDischargeEfficiency,
+ *   getChargeEfficiencyBase, getDischargeEfficiencyBase, getAppliedEfficiency,
+ *   setPeukertExponent, getPeukertExponent, setPeukertReferenceRate,
+ *   getPeukertReferenceRate, variableEfficiency,
+ *   setGassingModel, setBatteryVoltage, getGassingThreshold (×2),
+ *   getGassingCurrent, isGassingModelEnabled, getGassingIRef
+ *
+ * Pour appliquer un rendement, le projet pondère le courant AVANT l'appel :
+ * @code
+ *   coulomb.addMeasurement(I * eta);        // ou
+ *   coulomb.addCharge(I * eta * dt_s);      // charge déjà intégrée
+ * @endcode
+ *
  * Utilisation:
  * @code
  * #include "Coulomb.h"
- * 
+ *
  * Coulomb coulombCounter;
- * 
+ *
  * void loop() {
  *   float courant = lireCourant(); // votre fonction de mesure
  *   coulombCounter.addMeasurement(courant, micros());
- *   
+ *
  *   if (millis() - lastDisplay > 1000) {
  *     Serial.print("Coulombs: "); Serial.println(coulombCounter.getTotalCoulombs());
  *   }
  * }
  * @endcode
- * 
+ *
  * La persistance (EEPROM, FRAM, LittleFS) est déléguée à la librairie
  * Fo170/Persistance : on restaure via setTotalCoulombs() et on sauvegarde
  * via getTotalCoulombs() (ou getCoulombs()).
- * 
- * v1.3.1 (18/10/2026) : η DÉCOUPLÉ de Peukert. La loi η_base·(I_ref/|I|)^(n−1)
- *   appliquée en décharge INVERSAIT le sens de Peukert (décharge comptée à 58 %
- *   à 5 A) et son écrêtage à 1.0 l'annulait en charge pour |I| ≤ ~1 A — soit le
- *   régime même qu'elle devait corriger. η est désormais CONSTANT par direction
- *   (charge 0,90 / décharge 1,00) ; la correction de Peukert reste dans
- *   `BatteryModel::getEffectiveCapacity(I)`, où elle est physiquement juste.
- *   + garde isfinite sur le courant (F14) + reset() complet (F12).
- * 
- * v1.3.0 (18/10/2026) : rendement faradique η APPLIQUÉ À L'INTÉGRATION.
- *   Avant, `addMeasurement()` intégrait le courant brut (η=1 implicite) : la
- *   charge solaire était comptée à 1:1 alors que le rendement réel d'une
- *   batterie plomb vaut 0,65-0,90 selon le courant → SoC dérivait de +7 %/cycle
- *   (mesuré sur le Coulométre, 18/10/2026). Désormais :
- *     ΔAh = I · Δt · η(I),  η(I) = η_base · (I_ref/|I|)^(n−1), borné [0,5 ; 1]
- *   η(I) est la même loi que `AmpereHeure::variableEfficiency()` (Peukert) ;
- *   η_charge et η_décharge sont distincts. Défaut η=1 et n=1 ⇒ comportement
- *   identique à la v1.2.1 (rétrocompatible).
- * 
- * Version: 1.3.0
+ *
+ * Version: 2.0.0
  * Date: Octobre 2026
  */
 
@@ -51,7 +52,7 @@
 #define COULOMB_H
 
 // Version de la librairie (source UNIQUE — agrégée par src/liste_lib.h)
-#define __COULOMB_H_VERSION__ "1.3.1"
+#define __COULOMB_H_VERSION__ "2.0.0"
 
 #include <Arduino.h>
 #include <climits>
@@ -59,10 +60,10 @@
 /**
  * @class Coulomb
  * @brief Compteur de Coulombs avec filtrage
- * 
+ *
  * Calcule et cumule les Coulombs (1 Coulomb = 1 Ampère × 1 seconde)
  * à partir de mesures de courant et d'intervalles de temps.
- * 
+ *
  * Caractéristiques:
  * - Calcul précis avec timestamps microsecondes
  * - Filtrage exponentiel du courant et des intervalles
@@ -73,37 +74,30 @@ class Coulomb {
 private:
     // Paramètres de configuration
     float _filterAlpha;           ///< Coefficient de filtrage exponentiel (0-1)
-    
-    // Rendement faradique η (v1.3.0) — appliqué à l'intégration du courant
-    float _chargeEfficiency;      ///< η en charge à I_ref (0.5-1, défaut 1)
-    float _dischargeEfficiency;   ///< η en décharge à I_ref (0.5-1, défaut 1)
-    float _peukertN;              ///< Exposant de Peukert (<=1 ⇒ η constant)
-    float _peukertIref;           ///< Courant de référence de η (A)
-    float _appliedEfficiency;     ///< η de la dernière mesure (diagnostic)
-    
+
     // États internes
     float _coulomb;                ///< Coulombs depuis la dernière remise à zéro
     float _coulombBase;            ///< Coulombs restaurés via setTotalCoulombs (base)
     float _coulombCumul;           ///< Coulombs totaux (base + intégration)
     float _coulombPerSecond;       ///< Coulombs par seconde (puissance instantanée)
     float _coulombPerSecondAvg;    ///< Moyenne filtrée des Coulombs/s
-    
+
     // Variables de temps
     unsigned long _lastMicros;      ///< Dernier timestamp en microsecondes
     float _lastIntervalSec;         ///< Dernier intervalle calculé en secondes
     float _avgIntervalSec;          ///< Intervalle moyen filtré
     bool _firstMeasurement;         ///< Indique si c'est la première mesure
-    
+
     // Variables de courant
     float _current;                 ///< Dernier courant mesuré (A)
     float _currentAvg;              ///< Courant moyen filtré
-    
+
     // Statistiques
     unsigned long _sampleCount;     ///< Nombre d'échantillons traités
     float _maxCoulomb;              ///< Valeur maximale atteinte
     float _minCoulomb;              ///< Valeur minimale atteinte
     bool _trackMinMax;              ///< Activer le suivi des min/max
-    
+
     /**
      * @brief Calcule l'intervalle de temps en gérant le débordement de micros()
      * @param currentMicros Timestamp actuel en microsecondes
@@ -111,7 +105,7 @@ private:
      */
     float calculateInterval(unsigned long currentMicros) {
         unsigned long diff;
-        
+
         if (currentMicros >= _lastMicros) {
             // Cas normal
             diff = currentMicros - _lastMicros;
@@ -119,23 +113,18 @@ private:
             // Gestion du débordement (environ 70 minutes)
             diff = (ULONG_MAX - _lastMicros) + currentMicros + 1;
         }
-        
+
         return diff * 0.000001f; // Conversion microsecondes -> secondes
     }
-    
+
 public:
     /**
      * @brief Constructeur
      * @param filterAlpha Coefficient de filtrage (0-1, défaut: 0.99)
      *        Plus proche de 1 = filtrage plus fort
      */
-    Coulomb(float filterAlpha = 0.99) : 
+    Coulomb(float filterAlpha = 0.99) :
         _filterAlpha(filterAlpha),
-        _chargeEfficiency(1.0f),
-        _dischargeEfficiency(1.0f),
-        _peukertN(1.0f),
-        _peukertIref(1.3f),
-        _appliedEfficiency(1.0f),
         _coulomb(0.0f),
         _coulombBase(0.0f),
         _coulombCumul(0.0f),
@@ -151,12 +140,12 @@ public:
         _maxCoulomb(-1e38f),
         _minCoulomb(1e38f),
         _trackMinMax(false) {}
-    
+
     /**
      * @brief Destructeur
      */
     ~Coulomb() {}
-    
+
     /**
      * @brief Initialise le compteur
      * @param initialCoulomb Valeur initiale de Coulombs (défaut: 0)
@@ -166,30 +155,30 @@ public:
         _coulomb = initialCoulomb;
         _coulombCumul = _coulombBase + initialCoulomb;
         _sampleCount = 0;
-        
+
         if (resetTimestamp) {
             _lastMicros = micros();
             _firstMeasurement = true;
         }
-        
+
         // Réinitialiser les stats si demandé
         if (_trackMinMax) {
             _maxCoulomb = -1e38f;
             _minCoulomb = 1e38f;
         }
     }
-    
+
     /**
      * @brief Ajoute une mesure de courant avec timestamp automatique
      * @param currentAmps Courant mesuré en Ampères
      * @return Coulombs totaux après cette mesure
-     * 
+     *
      * Utilise micros() pour le timestamp automatiquement
      */
     float addMeasurement(float currentAmps) {
         return addMeasurement(currentAmps, micros());
     }
-    
+
     /**
      * @brief Ajoute une mesure de courant avec timestamp explicite
      * @param currentAmps Courant mesuré en Ampères
@@ -199,7 +188,7 @@ public:
     float addMeasurement(float currentAmps, unsigned long microsTimestamp) {
         // Sauvegarder le courant
         _current = currentAmps;
-        
+
         // Première mesure ? Juste stocker le timestamp
         if (_firstMeasurement || _lastMicros == 0) {
             _lastMicros = microsTimestamp;
@@ -207,21 +196,24 @@ public:
             _firstMeasurement = false;
             return _coulombCumul;
         }
-        
+
         // Calculer l'intervalle
         _lastIntervalSec = calculateInterval(microsTimestamp);
-        
+
         // Mettre à jour le timestamp pour la prochaine mesure
         _lastMicros = microsTimestamp;
-        
+
         return addMeasurementWithInterval(currentAmps, _lastIntervalSec);
     }
-    
+
     /**
      * @brief Ajoute une mesure avec intervalle explicite
      * @param currentAmps Courant mesuré en Ampères
      * @param intervalSec Intervalle de temps en secondes
      * @return Coulombs totaux après cette mesure
+     *
+     * v2.0.0 : l'intégration est BRUTE (ΔC = I · Δt). Le courant doit déjà
+     * être pondéré par le rendement si le projet en applique un.
      */
     float addMeasurementWithInterval(float currentAmps, float intervalSec) {
         // Validation
@@ -229,58 +221,75 @@ public:
             return _coulombCumul;
         }
 
-        // v1.3.1 (F14) : un seul échantillon NaN/Inf empoisonnait DÉFINITIVEMENT
-        // _coulomb (aucune réparation automatique) → SoC_coulomb → SoC_fused.
-        // L'INA226 peut renvoyer NaN si la trame I²C est corrompue.
+        // Garde : un seul échantillon NaN/Inf empoisonnait DÉFINITIVEMENT
+        // _coulomb (aucune réparation automatique). L'INA226 peut renvoyer NaN
+        // si la trame I²C est corrompue.
         if (!isfinite(currentAmps)) return _coulombCumul;
-        
+
         // Mise à jour des statistiques
         _sampleCount++;
-        
+
         // Filtrer le courant
         _currentAvg = _filterAlpha * _currentAvg + (1 - _filterAlpha) * currentAmps;
-        
+
         // Filtrer l'intervalle
         _avgIntervalSec = _filterAlpha * _avgIntervalSec + (1 - _filterAlpha) * intervalSec;
-        
-        // Rendement faradique η (v1.3.1) — CONSTANT par direction, indépendant du
-        // courant. En charge, η ≤ 1 réduit la charge intégrée (pertes de
-        // conversion/gassing) : le SoC monte moins vite. En décharge, η = 1.0
-        // (défaut) ⇒ intégration telle que mesurée — NE PAS descendre sous 1.0,
-        // cela ferait baisser le SoC trop lentement (biais optimiste).
-        // η=1 partout (défaut) ⇒ intégration brute v1.2.1.
-        float eta = 1.0f;
-        if (currentAmps > 0.0f)      eta = getChargeEfficiency(currentAmps);
-        else if (currentAmps < 0.0f) eta = getDischargeEfficiency(currentAmps);
-        _appliedEfficiency = eta;
 
-        // Calculer les Coulombs pour cet intervalle (I × Δt × η)
-        float coulombDelta = currentAmps * intervalSec * eta;
-        
+        // Intégration pure : ΔC = I × Δt
+        float coulombDelta = currentAmps * intervalSec;
+
         // Mettre à jour les cumuls
         _coulomb += coulombDelta;
         _coulombCumul = _coulombBase + _coulomb;
-        
+
         // Calculer les Coulombs par seconde (puissance instantanée)
         if (intervalSec > 1e-6) {
             _coulombPerSecond = coulombDelta / intervalSec;
         } else {
             _coulombPerSecond = currentAmps; // Équivalent car 1A = 1C/s
         }
-        
+
         // Filtrer la puissance instantanée
-        _coulombPerSecondAvg = _filterAlpha * _coulombPerSecondAvg + 
+        _coulombPerSecondAvg = _filterAlpha * _coulombPerSecondAvg +
                                (1 - _filterAlpha) * _coulombPerSecond;
-        
+
         // Mettre à jour les min/max si activé
         if (_trackMinMax) {
             if (_coulombCumul > _maxCoulomb) _maxCoulomb = _coulombCumul;
             if (_coulombCumul < _minCoulomb) _minCoulomb = _coulombCumul;
         }
-        
+
         return _coulombCumul;
     }
-    
+
+    /**
+     * @brief Ajoute directement une quantité de charge déjà intégrée
+     * @param coulombsDelta Charge à ajouter en Coulombs (signée : < 0 = décharge)
+     * @return Coulombs totaux après cet ajout
+     *
+     * v2.0.0 — point d'entrée pour un projet qui calcule lui-même son
+     * incrément (rendement, Peukert, gazage…) sans passer par un courant :
+     * @code
+     *   float dC = I * dt_s * eta;   // politique du projet
+     *   coulomb.addCharge(dC);
+     * @endcode
+     * Ne touche ni `_current` ni `_lastMicros` (aucune notion de temps ici).
+     */
+    float addCharge(float coulombsDelta) {
+        if (!isfinite(coulombsDelta)) return _coulombCumul;
+
+        _sampleCount++;
+        _coulomb += coulombsDelta;
+        _coulombCumul = _coulombBase + _coulomb;
+
+        if (_trackMinMax) {
+            if (_coulombCumul > _maxCoulomb) _maxCoulomb = _coulombCumul;
+            if (_coulombCumul < _minCoulomb) _minCoulomb = _coulombCumul;
+        }
+
+        return _coulombCumul;
+    }
+
     /**
      * @brief Réinitialise le compteur à zéro
      */
@@ -289,13 +298,10 @@ public:
         _coulombBase = 0.0f;
         _coulombCumul = 0.0f;
         _sampleCount = 0;
-        // v1.3.1 (F12) : les moyennes et le diagnostic η n'étaient pas remis à zéro
-        // → getAppliedEfficiency() renvoyait le η d'AVANT le reset (diagnostic faux).
         _coulombPerSecond = 0.0f;
         _coulombPerSecondAvg = 0.0f;
         _currentAvg = 0.0f;
-        _appliedEfficiency = 1.0f;
-        
+
         // Réinitialiser les stats
         if (_trackMinMax) {
             _maxCoulomb = -1e38f;
@@ -315,7 +321,7 @@ public:
     /**
      * @brief Restaure une valeur cumulée (appelé après un load de persistance)
      * @param coulombs Valeur cumulée à restaurer (Coulombs totaux)
-     * 
+     *
      * Définit la base sur laquelle l'intégration s'ajoutera.
      * À utiliser avec la librairie Fo170/Persistance :
      *   persistance.loadFloat("coulomb", &v);
@@ -325,76 +331,76 @@ public:
         _coulombBase = coulombs;
         _coulombCumul = _coulombBase + _coulomb;
     }
-    
+
     // ========== Getters ==========
-    
+
     /**
      * @return Coulombs depuis la dernière réinitialisation
      */
     float getCoulombs() const { return _coulomb; }
-    
+
     /**
      * @return Coulombs totaux (depuis le dernier reset ou setTotalCoulombs)
      */
     float getTotalCoulombs() const { return _coulombCumul; }
-    
+
     /**
      * @return Coulombs par seconde actuels
      */
     float getCoulombsPerSecond() const { return _coulombPerSecond; }
-    
+
     /**
      * @return Moyenne filtrée des Coulombs par seconde
      */
     float getAverageCoulombsPerSecond() const { return _coulombPerSecondAvg; }
-    
+
     /**
      * @return Courant actuel
      */
     float getCurrent() const { return _current; }
-    
+
     /**
      * @return Courant moyen filtré
      */
     float getAverageCurrent() const { return _currentAvg; }
-    
+
     /**
      * @return Dernier intervalle calculé en secondes
      */
     float getLastInterval() const { return _lastIntervalSec; }
-    
+
     /**
      * @return Intervalle moyen filtré
      */
     float getAverageInterval() const { return _avgIntervalSec; }
-    
+
     /**
      * @return Nombre d'échantillons traités
      */
     unsigned long getSampleCount() const { return _sampleCount; }
-    
+
     /**
      * @return Valeur maximale atteinte (si tracking activé)
      */
     float getMaxCoulombs() const { return _maxCoulomb; }
-    
+
     /**
      * @return Valeur minimale atteinte (si tracking activé)
      */
     float getMinCoulombs() const { return _minCoulomb; }
-    
+
     /**
      * @return Les Coulombs convertis en Ampères-heures (1Ah = 3600C)
      */
     float getAmpereHours() const { return _coulombCumul / 3600.0f; }
-    
+
     /**
      * @return Les Coulombs depuis reset convertis en Ampères-heures
      */
     float getAmpereHoursSinceReset() const { return _coulomb / 3600.0f; }
-    
+
     // ========== Setters et configuration ==========
-    
+
     /**
      * @brief Configure le coefficient de filtrage
      * @param alpha Nouveau coefficient (0-1)
@@ -405,139 +411,38 @@ public:
         }
     }
 
-    // ========== Rendement faradique η (v1.3.0) ==========
-
     /**
-     * @brief Fixe les rendements de base (à I_ref), en charge et en décharge
-     * @param charge    η en charge (0-1). Plomb : 0.80-0.90.
-     * @param discharge η en décharge (0-1). Plomb : 0.99-1.00.
-     *
-     * Convention : η ≤ 1 réduit la charge intégrée (rendement faradique).
-     */
-    void setEfficiencies(float charge, float discharge) {
-        if (charge > 0.0f && charge <= 1.0f)      _chargeEfficiency = charge;
-        if (discharge > 0.0f && discharge <= 1.0f) _dischargeEfficiency = discharge;
-    }
-
-    /**
-     * @brief Exposant de Peukert — DÉPRÉCIÉ (conservé pour compat API)
-     *
-     * Depuis la v1.3.1, le rendement η ne dépend plus du courant : cet exposant
-     * n'a plus d'effet sur l'intégration. La loi de Peukert est appliquée par
-     * `BatteryModel::getEffectiveCapacity(I)` (capacité effective), où elle est
-     * physiquement correcte.
-     */
-    void setPeukertExponent(float n) {
-        if (isfinite(n) && n >= 1.0f && n <= 2.0f) _peukertN = n;
-    }
-
-    /**
-     * @brief Courant de référence de la loi de Peukert (≈ C/20)
-     * @param iref_A Courant de référence en Ampères
-     */
-    void setPeukertReferenceRate(float iref_A) {
-        if (iref_A > 0.0f) _peukertIref = iref_A;
-    }
-
-    /**
-     * @brief Rendement faradique en charge — CONSTANT (indépendant du courant)
-     *
-     * v1.3.1 : le rendement ne dépend PLUS de la loi de Peukert. Deux raisons :
-     *
-     * 1. **Sens physique inversé en décharge.** Peukert décrit la CAPACITÉ
-     *    DISPONIBLE, qui décroît avec |I| : les Ah prélevés doivent être
-     *    AMPLIFIÉS par (|I|/I_ref)^(n−1) ≥ 1. Appliquée comme rendement, la
-     *    même loi RÉDUISAIT la décharge (58 % à 5 A au lieu de 100 %) → le SoC
-     *    descendait 42 % trop lentement (biais optimiste, dangereux).
-     * 2. **Écrêtage qui annulait le correctif.** η_base·(I_ref/|I|)^(n−1)
-     *    écrêté à 1.0 vaut exactement 1.0 pour |I| ≤ I_ref/η_base^(1/(n−1))
-     *    ≈ 1 A — soit précisément le régime de faible courant que la v1.3.0
-     *    prétendait corriger. Seul le bulk solaire (> 1 A) était affecté.
-     *
-     * Références : « Faraday efficiency » (Wikipedia) — η est le rapport des
-     * charges échangées sur un cycle, pas un facteur de Peukert ;
-     * BU-808c et BU-403 (Battery University) — le rendement coulombique du
-     * plomb vaut ~90 % et DIMINUE à très faible courant (auto-décharge), il ne
-     * remonte pas à 100 %. La correction de Peukert reste disponible là où elle
-     * est juste : `BatteryModel::getEffectiveCapacity(I)` / `updateCoulombCount`.
-     *
-     * @param current Courant en A (ignoré — signature conservée pour compat)
-     */
-    float getChargeEfficiency(float current) const {
-        (void)current;
-        return _chargeEfficiency;
-    }
-
-    /**
-     * @brief Rendement faradique en décharge — CONSTANT (voir getChargeEfficiency)
-     *
-     * Défaut 1.0 : la décharge est intégrée telle que mesurée. Une valeur < 1
-     * réduirait la décharge (le SoC descendrait trop lentement) → ne pas
-     * descendre sous 1.0 sans justification physique.
-     */
-    float getDischargeEfficiency(float current) const {
-        (void)current;
-        return _dischargeEfficiency;
-    }
-
-    /**
-     * @brief Loi de Peukert sur le rendement — DÉPRÉCIÉE, conservée pour compat.
-     *
-     * N'est plus utilisée par `getChargeEfficiency()`/`getDischargeEfficiency()`
-     * depuis la v1.3.1 (cf. justification ci-dessus). Renvoie `base` tel quel.
-     */
-    float variableEfficiency(float base, float current) const {
-        (void)current;
-        return base;
-    }
-
-    /// η appliqué lors de la dernière mesure (diagnostic)
-    float getAppliedEfficiency() const { return _appliedEfficiency; }
-    float getChargeEfficiencyBase() const { return _chargeEfficiency; }
-    float getDischargeEfficiencyBase() const { return _dischargeEfficiency; }
-    float getPeukertExponent() const { return _peukertN; }
-    float getPeukertReferenceRate() const { return _peukertIref; }
-    
-    /**
-     * @brief Active/désactive le suivi des min/max
+     * @brief Active/désactive le suivi des valeurs min/max
      * @param enable true pour activer
      */
     void enableMinMaxTracking(bool enable) {
         _trackMinMax = enable;
         if (enable) {
-            _maxCoulomb = _coulombCumul;
-            _minCoulomb = _coulombCumul;
+            _maxCoulomb = -1e38f;
+            _minCoulomb = 1e38f;
         }
     }
-    
+
     /**
-     * @brief Force une valeur de courant moyen (utile pour l'initialisation)
-     * @param current Valeur de courant à utiliser
+     * @brief Force la valeur du courant moyen filtré
+     * @param current Valeur du courant moyen (A)
      */
     void setAverageCurrent(float current) {
         _currentAvg = current;
     }
-    
+
     /**
-     * @brief Affiche toutes les statistiques sur la console série
+     * @brief Affiche l'état interne sur le port série (debug)
      */
     void printDebug() {
-        Serial.println("=== COULOMB COUNTER DEBUG ===");
-        Serial.print("Coulombs (current): "); Serial.println(_coulomb, 6);
-        Serial.print("Coulombs (total): "); Serial.println(_coulombCumul, 6);
-        Serial.print("C/s: "); Serial.println(_coulombPerSecond, 6);
-        Serial.print("C/s avg: "); Serial.println(_coulombPerSecondAvg, 6);
-        Serial.print("Current: "); Serial.print(_current, 3); Serial.println(" A");
-        Serial.print("Current avg: "); Serial.print(_currentAvg, 3); Serial.println(" A");
-        Serial.print("Interval: "); Serial.print(_lastIntervalSec * 1000, 3); Serial.println(" ms");
-        Serial.print("Interval avg: "); Serial.print(_avgIntervalSec * 1000, 3); Serial.println(" ms");
-        Serial.print("Samples: "); Serial.println(_sampleCount);
-        Serial.print("Ampere-hours: "); Serial.print(getAmpereHours(), 6); Serial.println(" Ah");
-        if (_trackMinMax) {
-            Serial.print("Max: "); Serial.println(_maxCoulomb, 6);
-            Serial.print("Min: "); Serial.println(_minCoulomb, 6);
-        }
-        Serial.println("===============================");
+        Serial.println(F("--- Coulomb ---"));
+        Serial.print(F("Coulombs     : ")); Serial.println(_coulomb, 4);
+        Serial.print(F("Total        : ")); Serial.println(_coulombCumul, 4);
+        Serial.print(F("Ah           : ")); Serial.println(getAmpereHours(), 6);
+        Serial.print(F("Courant      : ")); Serial.println(_current, 4);
+        Serial.print(F("Courant moy  : ")); Serial.println(_currentAvg, 4);
+        Serial.print(F("Intervalle   : ")); Serial.println(_lastIntervalSec, 4);
+        Serial.print(F("Échantillons : ")); Serial.println(_sampleCount);
     }
 };
 

@@ -41,12 +41,17 @@ Version **3.0.1** · Licence **GPL-3.0** · Auteur : Olivier FOURNET (olivier.fo
 
 ## Contenu
 
-| Classe | Fichier | Rôle |
-|---|---|---|
-| `Ah_GD` | `src/CoulombsAh.h` | Accumulateur de charge à **deux étages** : coulombs **et** ampères-heures, exact quelle que soit la magnitude |
+| Header | Classe | État | Rôle |
+|---|---|---|---|
+| **`CoulombsAh.h`** | `Ah_GD` | **recommandé** | compteur **fusionnel** coulombs/Ah, deux étages `int64`, exact à toute magnitude |
+| `Coulomb.h` | `Coulomb` | disponible | compteur de coulombs `float32` (v2.0.1) |
+| `AmpereHeure.h` | `AmpereHeure` | disponible | compteur d'Ah `float32` (v2.0.1) |
 
-Un seul header, une seule classe. `Coulomb.h` et `AmpereHeure.h` ont été
-supprimés en 3.0.0.
+Les trois headers sont **indépendants** et peuvent être inclus séparément ou
+ensemble (vérifié : aucun conflit de symbole).
+
+⚠️ `Coulomb` et `AmpereHeure` restent en `float32` : au-delà de ~50 Ah leurs
+incréments sont arrondis à zéro. Pour un cumul de longue durée, utiliser `Ah_GD`.
 
 ---
 

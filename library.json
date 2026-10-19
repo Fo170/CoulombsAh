@@ -19,7 +19,9 @@
   "frameworks": "arduino",
   "platforms": "espressif8266",
   "headers": [
-    "CoulombsAh.h"
+    "CoulombsAh.h",
+    "Coulomb.h",
+    "AmpereHeure.h"
   ],
   "dependencies": {
     "Fo170/Persistance": "^1.0.0"

@@ -2,6 +2,11 @@
 
 ## [3.0.1] - 2026-10-19
 
+> **`Coulomb.h` et `AmpereHeure.h` sont RESTAURÉS** dans ce dépôt (ils avaient été
+> supprimés par erreur lors de la 3.0.0). Ils restent disponibles et fonctionnels
+> — les trois headers coexistent sans conflit — mais `CoulombsAh.h` est le
+> compteur recommandé. Voir la section « Coexistence des trois headers ».
+
 > Version publiée. Le correctif ci-dessous a été appliqué avant la première
 > publication : le tag `v3.0.0` n'a jamais existé séparément (il a été retiré).
 
@@ -111,6 +116,30 @@ intégrée).
 - Nouvelle macro de version : `__COULOMBSAH_H_VERSION__` (remplace
   `__COULOMB_H_VERSION__` et `__AMPEREHEURE_H_VERSION__`)
 - Alias de compatibilité : `AH_GD_UC_PER_AH` → `COULOMBSAH_UC_PER_AH`, etc.
+
+### 📦 Coexistence des trois headers
+
+`src/` contient désormais **trois** headers indépendants :
+
+| Header | Classe | État | Rôle |
+|---|---|---|---|
+| **`CoulombsAh.h`** | `Ah_GD` | **recommandé** | compteur fusionnel coulombs/Ah, deux étages `int64`, exact à toute magnitude |
+| `Coulomb.h` | `Coulomb` | disponible | compteur de coulombs `float32` (v2.0.1) |
+| `AmpereHeure.h` | `AmpereHeure` | disponible | compteur d'Ah `float32` (v2.0.1) |
+
+Ils sont **indépendants** : aucun conflit de symbole, chacun peut être inclus
+seul. Vérifié par compilation conjointe :
+
+```
+Ah_GD       : 1.000000 Ah
+Coulomb     : 3600.0000 C = 1.0000 Ah
+AmpereHeure : 1.0000 Ah
+```
+
+⚠️ `Coulomb` et `AmpereHeure` restent en `float32` : au-delà de ~50 Ah, leurs
+incréments sont arrondis à zéro (voir le tableau de précision en tête de
+`CoulombsAh.h`). Les utiliser pour un cumul de longue durée reproduira le défaut
+que `Ah_GD` corrige.
 
 ## [2.0.1] - 2026-10-19
 

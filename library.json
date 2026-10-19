@@ -1,8 +1,8 @@
 {
   "name": "CoulombsAh",
-  "version": "3.0.1",
-  "description": "Compteur de charge fusionnel Coulombs/Ah pour ESP8266, a GRANDE DYNAMIQUE. v3.0.0 : le header CoulombsAh.h REMPLACE Coulomb.h et AmpereHeure.h — un seul accumulateur a DEUX ETAGES porte les deux unites (1 Ah = 3600 C), donc plus de doublon. Precision : Ah entiers int64 + reste en micro-coulombs int64 (report automatique a 1 Ah), ce qui rend le comptage EXACT quelle que soit la magnitude (un float32 perdait -4,3 % sur 10 M echantillons a 910 Ah). Compteurs BRUTS charges/decharges independants (un aller-retour sous 1 Ah reste visible). Persistance 4 x uint32 avec saturation explicite, resistance d arrondi anti-biais, gardes NaN/Inf et de magnitude. INTEGRATEUR PUR : aucune physique (ni eta, ni Peukert, ni SoC) — ces politiques appartiennent au projet utilisateur. Dependance unique : Arduino.h.",
-  "keywords": "coulomb, ampere-heure, ampere-hours, batterie, battery, soc, coulomètre, coulombmeter, esp8266, ina226, persistance",
+  "version": "3.1.0",
+  "description": "Compteur de charge fusionnel Coulombs/Ah pour ESP8266, a GRANDE DYNAMIQUE. Un seul accumulateur (Ah_GD) porte les deux unites (1 Ah = 3600 C) a DEUX ETAGES : Ah entiers int64 + reste en micro-coulombs int64 avec report automatique a 1 Ah, ce qui rend le comptage EXACT quelle que soit la magnitude (un float32 perdait -4,3 % sur 10 M echantillons a 910 Ah). Compteurs BRUTS charges/decharges independants, avec DEUX restes separes (aiguillage sur le signe de l'increment) : un aller-retour sous 1 Ah reste visible. getNetMicroCoulombs() fournit un delta exact en int64 pour les differences. Persistance 4 x uint32 avec saturation explicite, resistance d'arrondi anti-biais, gardes NaN/Inf et de magnitude. INTEGRATEUR PUR : aucune physique (ni eta, ni Peukert, ni SoC, ni capacite) — ces politiques appartiennent au projet utilisateur. Le pas de temps n'est pas du ressort du compteur : le projet fournit une charge deja integree. Dependance unique : Arduino.h.",
+  "keywords": "coulomb, ampere-heure, ampere-hours, batterie, battery, soc, coulometre, coulombmeter, esp8266, ina226, persistance, precision",
   "authors": [
     {
       "name": "Olivier FOURNET",
@@ -19,11 +19,6 @@
   "frameworks": "arduino",
   "platforms": "espressif8266",
   "headers": [
-    "CoulombsAh.h",
-    "Coulomb.h",
-    "AmpereHeure.h"
-  ],
-  "dependencies": {
-    "Fo170/Persistance": "^1.0.0"
-  }
+    "CoulombsAh.h"
+  ]
 }

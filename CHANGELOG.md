@@ -1,11 +1,48 @@
 # Changelog - CoulombsAh
 
-## [3.0.1] - 2026-10-19
+## [Séparation des dépôts] - 2026-10-19
 
-> **`Coulomb.h` et `AmpereHeure.h` sont RESTAURÉS** dans ce dépôt (ils avaient été
-> supprimés par erreur lors de la 3.0.0). Ils restent disponibles et fonctionnels
-> — les trois headers coexistent sans conflit — mais `CoulombsAh.h` est le
-> compteur recommandé. Voir la section « Coexistence des trois headers ».
+Le dépôt historique `Fo170/CoulombsAh` contenait **trois** headers
+(`Coulomb.h`, `AmpereHeure.h`, `CoulombsAh.h`) alors qu'ils sont parfaitement
+indépendants : aucun include croisé, dépendance unique `<Arduino.h>`.
+
+Chacun est désormais dans **son propre dépôt**, avec son historique propre :
+
+| Dépôt | Header | Classe | Version |
+|---|---|---|---|
+| **Fo170/CoulombsAh** | **`CoulombsAh.h`** | `Ah_GD` | **3.1.0** |
+| Fo170/Coulomb | `Coulomb.h` | `Coulomb` | 2.0.1 |
+| Fo170/AmpereHeure | `AmpereHeure.h` | `AmpereHeure` | 2.0.1 |
+
+Ce dépôt ne contient plus que **`CoulombsAh.h`**, le compteur fusionnel.
+Les entrées de CHANGELOG concernant `Coulomb.h` et `AmpereHeure.h` ont été
+transférées dans leurs dépôts respectifs.
+
+L'historique de ce dépôt reste intact et consultable : le tag **`v3.0.1`**
+contient encore les trois headers. Le tag **`v3.1.0`** marque la séparation.
+
+## [3.1.0] - 2026-10-19
+
+### 📦 Séparation — un header par dépôt
+
+`Coulomb.h` et `AmpereHeure.h` quittent ce dépôt pour `Fo170/Coulomb` et
+`Fo170/AmpereHeure`. `CoulombsAh.h` reste ici, seul.
+
+**Motif** : les trois headers n'ont **aucune dépendance mutuelle** (vérifié :
+`<Arduino.h>` + `<climits>` uniquement). Les regrouper n'apportait rien et
+brouillait la portée de chacun — un utilisateur voulant seulement un compteur
+de coulombs `float32` devait tout de même récupérer l'accumulateur `int64`.
+
+### 🧹 Nettoyage
+
+- `library.json` : `headers` réduit à `CoulombsAh.h`
+- `library.json` : dépendance `Fo170/Persistance` **retirée** — le header ne
+  l'inclut pas (`<Arduino.h>` seul). Elle n'était déclarée qu'à cause des
+  exemples ; elle reste dans leurs `platformio.ini`.
+- `exemples/Coulomb/` et `exemples/AmpereHeure/` : déplacés vers leurs dépôts
+- `exemples/CoulombsAh/` : **créé** (il n'existait pas)
+
+## [3.0.1] - 2026-10-19
 
 > Version publiée. Le correctif ci-dessous a été appliqué avant la première
 > publication : le tag `v3.0.0` n'a jamais existé séparément (il a été retiré).
@@ -24,7 +61,7 @@ Vérifié : `addAmpereHours(910)` donnait **277,78 Ah** au lieu de 910 Ah.
 
 ## [3.0.0] - 2026-10-19 (inclus dans 3.0.1)
 
-### 💥 BREAKING — un seul compteur FUSIONNEL, `Coulomb.h` et `AmpereHeure.h` supprimés
+### 💥 BREAKING — un seul compteur FUSIONNEL
 
 Les deux compteurs séparés (`Coulomb` en coulombs, `AmpereHeure` en Ah)
 souffraient du **même défaut de fond** : un `float32` ne peut pas incrémenter
@@ -116,169 +153,3 @@ intégrée).
 - Nouvelle macro de version : `__COULOMBSAH_H_VERSION__` (remplace
   `__COULOMB_H_VERSION__` et `__AMPEREHEURE_H_VERSION__`)
 - Alias de compatibilité : `AH_GD_UC_PER_AH` → `COULOMBSAH_UC_PER_AH`, etc.
-
-### 📦 Coexistence des trois headers
-
-`src/` contient désormais **trois** headers indépendants :
-
-| Header | Classe | État | Rôle |
-|---|---|---|---|
-| **`CoulombsAh.h`** | `Ah_GD` | **recommandé** | compteur fusionnel coulombs/Ah, deux étages `int64`, exact à toute magnitude |
-| `Coulomb.h` | `Coulomb` | disponible | compteur de coulombs `float32` (v2.0.1) |
-| `AmpereHeure.h` | `AmpereHeure` | disponible | compteur d'Ah `float32` (v2.0.1) |
-
-Ils sont **indépendants** : aucun conflit de symbole, chacun peut être inclus
-seul. Vérifié par compilation conjointe :
-
-```
-Ah_GD       : 1.000000 Ah
-Coulomb     : 3600.0000 C = 1.0000 Ah
-AmpereHeure : 1.0000 Ah
-```
-
-⚠️ `Coulomb` et `AmpereHeure` restent en `float32` : au-delà de ~50 Ah, leurs
-incréments sont arrondis à zéro (voir le tableau de précision en tête de
-`CoulombsAh.h`). Les utiliser pour un cumul de longue durée reproduira le défaut
-que `Ah_GD` corrige.
-
-## [2.0.1] - 2026-10-19
-
-### 🐛 Fixed — `getLastInterval()` n'était jamais mis à jour par `addMeasurementWithInterval()`
-
-`_lastIntervalSec` n'était assigné QUE dans `addMeasurement(current, micros)`.
-Un appelant qui utilise `addMeasurementWithInterval()` — c'est le cas de
-`CoulombFct` dans le firmware Coulométre depuis la v2.0.0 — laissait donc
-`getLastInterval()` à sa valeur d'initialisation (**0,001 s**) pour toujours.
-
-**Impact en aval.** `BatteryKalman::update()` lit
-`coulombMeter->getLastInterval()` comme pas de temps du modèle. Il valait
-0,001 s au lieu de 0,1 s, soit **100× trop petit**. Toutes les constantes de
-temps étaient dilatées d'autant :
-
-| Constante | Valeur voulue | Valeur effective |
-|---|---|---|
-| τ_pol | 12 s | **1200 s** |
-| τ2 (diffusion) | 300 s | **8,3 h** |
-| τ_hyst | 2000 s | **55 h** |
-
-La polarisation et l'hystérésis ne s'établissaient donc jamais : `V_pol_state`
-restait ≈ 0 et l'OCV calculé était biaisé.
-
-**Correctif** : `addMeasurementWithInterval()` mémorise l'intervalle qu'il a
-réellement utilisé.
-
-### 🏷️ Divers
-
-- Version `2.0.0` → `2.0.1` (`library.json` + macro)
-
-## [2.0.0] - 2026-10-19
-
-### 💥 BREAKING — les deux compteurs redeviennent des INTÉGRATEURS PURS
-
-**Principe.** Une librairie de comptage doit savoir faire `Σ = Σ + I·Δt` et rien
-d'autre. Toute **politique physique** — rendement faradique, Peukert, état de
-charge, capacité batterie, autonomie, dégagement gazeux — est une décision du
-**projet** qui utilise la librairie. Elle a donc été **supprimée** de
-`CoulombsAh` et déplacée dans le dépôt du Coulométre :
-`src/Coulomb_fct.h` (η + gazage) et `src/Ah_fct.h` (Peukert + accumulateur).
-
-### ❌ API SUPPRIMÉE — `Coulomb.h`
-
-| Méthode retirée | Remplacée par |
-|---|---|
-| `setEfficiencies(charge, discharge)` | `CoulombFct::setEfficiencyBase()` |
-| `getChargeEfficiency(I)` | `CoulombFct::efficiencyFor(I)` |
-| `getDischargeEfficiency(I)` | `CoulombFct::etaDis` |
-| `getChargeEfficiencyBase()` / `getDischargeEfficiencyBase()` | `CoulombFct::etaChg` / `.etaDis` |
-| `getAppliedEfficiency()` | `CoulombFct::etaApplied` |
-| `setPeukertExponent()` / `getPeukertExponent()` | `AhFct::setPeukertExponent()` (code mort, supprimé) |
-| `setPeukertReferenceRate()` / `getPeukertReferenceRate()` | `AhFct::setPeukertReferenceRate()` |
-| `variableEfficiency(base, I)` | supprimée (renvoyait `base` depuis la 1.3.1) |
-| `setGassingModel(...)` | `CoulombFct::setGassingModel(...)` |
-| `setBatteryVoltage(V, T)` | `CoulombFct::setBatteryVoltage(V, T)` |
-| `getGassingThreshold()` ×2, `getGassingCurrent()`, `isGassingModelEnabled()`, `getGassingIRef()` | `CoulombFct::gassingThreshold()`, `.gasI` |
-
-**Conséquence sur l'intégration** : `addMeasurementWithInterval()` n'applique
-plus aucun rendement. `ΔC = I · Δt`, point. Le projet pondère le courant avant
-l'appel (`addMeasurement(I * eta)`) ou injecte une charge déjà intégrée.
-
-### ✅ API AJOUTÉE — `Coulomb.h`
-
-```cpp
-float addCharge(float coulombsDelta);   // charge déjà intégrée, signée
-```
-Ne touche ni `_current` ni `_lastMicros` : aucune notion de temps. Rejette
-NaN/Inf. Sert aux projets qui calculent eux-mêmes leur incrément.
-
-### ❌ API SUPPRIMÉE — `AmpereHeure.h`
-
-| Méthode retirée | Motif |
-|---|---|
-| `setBatteryCapacity()` / `getBatteryCapacity()` | notion de capacité = politique du projet |
-| `setEfficiencies()` / `getChargeEfficiency()` / `getDischargeEfficiency()` / `variableEfficiency()` | rendement = politique du projet |
-| `setPeukertExponent()` / `getPeukertExponent()` / `setPeukertReferenceRate()` / `getPeukertReferenceRate()` | Peukert = politique du projet |
-| `updateStateOfCharge()` (privé) | SoC = politique du projet |
-| `getStateOfCharge()` / `getStateOfChargePercent()` | idem |
-| `calibrateStateOfCharge()` | idem |
-| `getRemainingCapacity()` | idem |
-| `setLowBatteryThreshold()` / `isLowBattery()` | idem |
-| `getEstimatedCycles()` | dérivé de la capacité |
-| `getEstimatedRuntimeHours()` / `getEstimatedRuntimeFormatted()` | dérivé de la capacité |
-| `getPower(V)` | ne relève pas du comptage |
-
-**Signature du constructeur** : `AmpereHeure(float filterAlpha = 0.99)`.
-La capacité n'est plus un paramètre (elle n'a plus de sens ici).
-
-### ✅ API AJOUTÉE — `AmpereHeure.h`
-
-```cpp
-float addCharge(float ahDelta);   // Ah déjà intégrés, signés
-```
-
-### 🧪 Ce qui est CONSERVÉ
-
-**`Coulomb`** : `begin`, `addMeasurement` (×2), `addMeasurementWithInterval`,
-`addCharge`, `reset` (×2), `setTotalCoulombs`, `getCoulombs`,
-`getTotalCoulombs`, `getCoulombsPerSecond`, `getAverageCoulombsPerSecond`,
-`getCurrent`, `getAverageCurrent`, `getLastInterval`, `getAverageInterval`,
-`getSampleCount`, `getMaxCoulombs`, `getMinCoulombs`, `getAmpereHours`,
-`getAmpereHoursSinceReset`, `setFilterAlpha`, `enableMinMaxTracking`,
-`setAverageCurrent`, `printDebug`.
-
-**`AmpereHeure`** : `begin`, `addMeasurement` (×2), `addMeasurementWithInterval`,
-`addCharge`, `reset` (×2), `setTotalAh`, `getAh`, `getTotalAh`, `getCurrent`,
-`getAverageCurrent`, `getCurrentDirection`, `isCharging`, `isDischarging`,
-`getTotalCharged`, `getTotalDischarged`, `getLastInterval`,
-`getAverageInterval`, `getSampleCount`, `getMaxAh`, `getMinAh`,
-`setFilterAlpha`, `printDebug`.
-
-### ⚠️ Migration
-
-```cpp
-// AVANT (1.3.x)
-Coulomb c;
-c.setEfficiencies(0.90f, 1.00f);
-c.setGassingModel(true, 2.35f, 11.7f, 0.45f, 6.0f, -0.005f);
-c.setBatteryVoltage(V, T);
-c.addMeasurement(I);
-
-// APRÈS (2.0.0) — la physique est dans le projet
-CoulombFct f;                       // src/Coulomb_fct.h
-f.setEfficiencyBase(0.90f, 1.00f);
-f.setGassingModel(true, 2.35f, 11.7f, 0.45f, 6.0f, -0.005f);
-f.addSample(I, V, T, dt_s);         // → applique η puis intègre
-
-// Ou, sans le projet, en pondérant soi-même :
-Coulomb c;
-c.addMeasurement(I * eta);
-```
-
-### 🏷️ Divers
-
-- `library.json` : `1.3.1` → `2.0.0`
-- `__COULOMB_H_VERSION__` : `1.3.1` → `2.0.0`
-- `__AMPEREHEURE_H_VERSION__` : `1.2.1` → `2.0.0`
-- La v1.3.2 (rendement de charge variable) n'a **jamais été publiée** : son
-  contenu a directement migré dans `CoulombFct` côté projet.
-
-## [1.3.1] - 2026-10-18

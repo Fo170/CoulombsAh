@@ -79,7 +79,7 @@
  *   1 C   = 1e6 µC
  *   Signe : une charge négative est une DÉCHARGE (compteur séparé).
  *
- * Version : 3.0.1
+ * Version : 3.1.0
  * Date    : Octobre 2026
  */
 
@@ -89,7 +89,7 @@
 #include <Arduino.h>
 
 // Version de la librairie (source UNIQUE — agrégée par src/liste_lib.h)
-#define __COULOMBSAH_H_VERSION__ "3.0.1"
+#define __COULOMBSAH_H_VERSION__ "3.1.0"
 
 // ============================================================
 // Constantes de conversion

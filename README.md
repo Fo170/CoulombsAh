@@ -2,13 +2,12 @@
 
 Compteur de charge **fusionnel Coulombs/Ah** pour ESP8266, à **grande dynamique**.
 
-Version **3.0.1** · Licence **GPL-3.0** · Auteur : Olivier FOURNET (olivier.fournet@free.fr) · Dépôt : [github.com/Fo170/CoulombsAh](https://github.com/Fo170/CoulombsAh)
+Version **3.1.0** · Licence **GPL-3.0** · Auteur : Olivier FOURNET (olivier.fournet@free.fr) · Dépôt : [github.com/Fo170/CoulombsAh](https://github.com/Fo170/CoulombsAh)
 
 > ## Un seul compteur, exact quelle que soit la magnitude
 >
-> Depuis la **3.0.0**, `CoulombsAh.h` **remplace** `Coulomb.h` et
-> `AmpereHeure.h`. Coulombs et ampères-heures sont la **même grandeur** à un
-> facteur 3600 près : un seul accumulateur les porte, et il doit être exact.
+> Coulombs et ampères-heures sont la **même grandeur** à un facteur 3600 près :
+> un seul accumulateur les porte, et il doit être exact.
 >
 > **Le problème résolu.** Un `float32` ne peut pas incrémenter une grande valeur
 > par petits pas — l'ULP croît avec la magnitude :
@@ -41,17 +40,26 @@ Version **3.0.1** · Licence **GPL-3.0** · Auteur : Olivier FOURNET (olivier.fo
 
 ## Contenu
 
-| Header | Classe | État | Rôle |
-|---|---|---|---|
-| **`CoulombsAh.h`** | `Ah_GD` | **recommandé** | compteur **fusionnel** coulombs/Ah, deux étages `int64`, exact à toute magnitude |
-| `Coulomb.h` | `Coulomb` | disponible | compteur de coulombs `float32` (v2.0.1) |
-| `AmpereHeure.h` | `AmpereHeure` | disponible | compteur d'Ah `float32` (v2.0.1) |
+| Header | Classe | Rôle |
+|---|---|---|
+| **`CoulombsAh.h`** | `Ah_GD` | compteur **fusionnel** coulombs/Ah, deux étages `int64`, exact à toute magnitude |
 
-Les trois headers sont **indépendants** et peuvent être inclus séparément ou
-ensemble (vérifié : aucun conflit de symbole).
+Ce dépôt ne contient **qu'un seul header**, sans dépendance (hors `<Arduino.h>`).
 
-⚠️ `Coulomb` et `AmpereHeure` restent en `float32` : au-delà de ~50 Ah leurs
-incréments sont arrondis à zéro. Pour un cumul de longue durée, utiliser `Ah_GD`.
+> ### 📦 Dépôts séparés
+>
+> `Coulomb.h` et `AmpereHeure.h` ont vécu ici jusqu'à la **3.0.1**. Ils sont
+> désormais dans leurs propres dépôts, avec leur historique :
+>
+> | Dépôt | Header | Classe | Version |
+> |---|---|---|---|
+> | **Fo170/CoulombsAh** | **`CoulombsAh.h`** | `Ah_GD` | **3.1.0** |
+> | [Fo170/Coulomb](https://github.com/Fo170/Coulomb) | `Coulomb.h` | `Coulomb` | 2.0.1 |
+> | [Fo170/AmpereHeure](https://github.com/Fo170/AmpereHeure) | `AmpereHeure.h` | `AmpereHeure` | 2.0.1 |
+>
+> Les trois headers étaient déjà **indépendants** (aucun include croisé) :
+> les regrouper obligeait à récupérer l'accumulateur `int64` même pour un simple
+> comptage de coulombs `float32`.
 
 ---
 
@@ -176,9 +184,9 @@ C'était un bug de la 3.0.0, corrigé en **3.0.1** (`addAmpereHours(910)` donnai
 
 ---
 
-## Migration 2.x → 3.0.0
+## Migration — des anciens compteurs vers `Ah_GD`
 
-| Avant (2.x) | Après (3.0.0) |
+| Avant | Après |
 |---|---|
 | `#include "Coulomb.h"` + `Coulomb` | `#include "CoulombsAh.h"` + `Ah_GD` |
 | `#include "AmpereHeure.h"` + `AmpereHeure` | idem |
@@ -188,13 +196,11 @@ C'était un bug de la 3.0.0, corrigé en **3.0.1** (`addAmpereHours(910)` donnai
 | `getAmpereHours()` | `getAhNet()` |
 | `getLastInterval()` | supprimé — le projet fournit le `dt` |
 | `getSampleCount()`, EMA, min/max | supprimés (inutilisés, et ce n'est pas du comptage) |
-| `__COULOMB_H_VERSION__` | `__COULOMBSAH_H_VERSION__` |
+| `__COULOMB_H_VERSION__` / `__AMPEREHEURE_H_VERSION__` | `__COULOMBSAH_H_VERSION__` |
 
-### Migration 1.x → 2.0.0 (historique)
-
-La 2.0.0 avait déjà retiré toute la physique des deux compteurs (rendement
-faradique, Peukert, SoC, capacité, autonomie, dégagement gazeux). Voir le
-CHANGELOG.
+Si vous préférez conserver les compteurs `float32`, ils sont dans leurs propres
+dépôts : [Fo170/Coulomb](https://github.com/Fo170/Coulomb) et
+[Fo170/AmpereHeure](https://github.com/Fo170/AmpereHeure).
 
 ---
 
@@ -217,7 +223,8 @@ Consultées le **2026-10-19**. Toutes répondent HTTP 200 à cette date.
 
 | Version | Changement majeur |
 |---|---|
-| **3.0.1** | `addAmpereHours()` avait la borne « échantillon » de `addCoulombs()` → une restauration de 910 Ah était écrêtée à 277,78 Ah. Borne propre en Ah. |
+| **3.1.0** | **Séparation des dépôts** — `Coulomb.h` et `AmpereHeure.h` partent dans `Fo170/Coulomb` et `Fo170/AmpereHeure`. Ce dépôt ne contient plus que `CoulombsAh.h`. Dépendance `Persistance` retirée de `library.json` (le header ne l'inclut pas). Exemple `exemples/CoulombsAh/` créé. |
+| 3.0.1 | `addAmpereHours()` avait la borne « échantillon » de `addCoulombs()` → une restauration de 910 Ah était écrêtée à 277,78 Ah. Borne propre en Ah. |
 | **3.0.0** | **RUPTURE** — `Coulomb.h` et `AmpereHeure.h` **remplacés** par un compteur unique et fusionnel `Ah_GD` (`CoulombsAh.h`) : deux étages (Ah entiers `int64` + reste µC `int64`), compteurs bruts, persistance 4 × `uint32`. Le `dt` n'est plus du ressort du compteur. |
 | 2.0.1 | `getLastInterval()` n'était pas mis à jour par `addMeasurementWithInterval()` → pas de temps du modèle 100× trop petit. |
 | 2.0.0 | **RUPTURE** — les deux libs redeviennent des **intégrateurs purs**. Toute la physique (η, Peukert, SoC, capacité, autonomie, gazage) est supprimée et migre dans le projet. |

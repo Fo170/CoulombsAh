@@ -2,6 +2,9 @@
 
 ## [3.0.1] - 2026-10-19
 
+> Version publiée. Le correctif ci-dessous a été appliqué avant la première
+> publication : le tag `v3.0.0` n'a jamais existé séparément (il a été retiré).
+
 ### 🐛 Fixed — `addAmpereHours()` était écrêtée par la borne de `addCoulombs()`
 
 `addAmpereHours()` appelait `addCoulombs(dAh × 3600)`. Or `addCoulombs()` borne
@@ -14,7 +17,7 @@ Vérifié : `addAmpereHours(910)` donnait **277,78 Ah** au lieu de 910 Ah.
 **Correctif** : `addAmpereHours()` a sa propre borne, exprimée en Ah
 (1e9 Ah, soit dAh × 3,6e9 < INT64_MAX) et n'appelle plus `addCoulombs()`.
 
-## [3.0.0] - 2026-10-19
+## [3.0.0] - 2026-10-19 (inclus dans 3.0.1)
 
 ### 💥 BREAKING — un seul compteur FUSIONNEL, `Coulomb.h` et `AmpereHeure.h` supprimés
 

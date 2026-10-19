@@ -1,7 +1,7 @@
 {
   "name": "CoulombsAh",
-  "version": "2.0.0",
-  "description": "Librairies header-only pour coulometre ESP8266 : comptage en Coulombs (Coulomb.h) et en Amperes-heures (AmpereHeure.h). v2.0.0 : INTEGRATEURS PURS — toute la physique (rendement faradique eta, Peukert, etat de charge, capacite batterie, autonomie, degagement gazeux) a ete SUPPRIMEE des librairies et deplacee dans le projet utilisateur. Coulomb ne fait que dC = I*dt ; AmpereHeure que dAh = I*dt/3600. Ajout de addCharge() pour injecter une charge deja integree. RUPTURE D API : setEfficiencies, getChargeEfficiency, setPeukert*, setGassingModel, setBatteryVoltage, getStateOfCharge, getRemainingCapacity, getEstimatedCycles, getEstimatedRuntime* sont retirees. v1.3.1 : eta decouple de Peukert. v1.3.0 : eta applique a integration. v1.1.0 : persistance deleguee a Fo170/Persistance.",
+  "version": "2.0.1",
+  "description": "Librairies header-only pour coulometre ESP8266 : comptage en Coulombs (Coulomb.h) et en Amperes-heures (AmpereHeure.h). v2.0.1 : correctif getLastInterval() (addMeasurementWithInterval ne le mettait pas a jour -> pas de temps du modele 100x trop petit). v2.0.0 : INTEGRATEURS PURS — toute la physique (rendement faradique eta, Peukert, etat de charge, capacite batterie, autonomie, degagement gazeux) a ete SUPPRIMEE des librairies et deplacee dans le projet utilisateur. Coulomb ne fait que dC = I*dt ; AmpereHeure que dAh = I*dt/3600. Ajout de addCharge() pour injecter une charge deja integree. RUPTURE D API : setEfficiencies, getChargeEfficiency, setPeukert*, setGassingModel, setBatteryVoltage, getStateOfCharge, getRemainingCapacity, getEstimatedCycles, getEstimatedRuntime* sont retirees. v1.3.1 : eta decouple de Peukert. v1.3.0 : eta applique a integration. v1.1.0 : persistance deleguee a Fo170/Persistance.",
   "keywords": "coulomb, ampere-heure, ampere-hours, batterie, battery, soc, coulomètre, coulombmeter, esp8266, ina226, persistance",
   "authors": [
     {

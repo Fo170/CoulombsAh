@@ -1,5 +1,35 @@
 # Changelog - CoulombsAh
 
+## [2.0.1] - 2026-10-19
+
+### 🐛 Fixed — `getLastInterval()` n'était jamais mis à jour par `addMeasurementWithInterval()`
+
+`_lastIntervalSec` n'était assigné QUE dans `addMeasurement(current, micros)`.
+Un appelant qui utilise `addMeasurementWithInterval()` — c'est le cas de
+`CoulombFct` dans le firmware Coulométre depuis la v2.0.0 — laissait donc
+`getLastInterval()` à sa valeur d'initialisation (**0,001 s**) pour toujours.
+
+**Impact en aval.** `BatteryKalman::update()` lit
+`coulombMeter->getLastInterval()` comme pas de temps du modèle. Il valait
+0,001 s au lieu de 0,1 s, soit **100× trop petit**. Toutes les constantes de
+temps étaient dilatées d'autant :
+
+| Constante | Valeur voulue | Valeur effective |
+|---|---|---|
+| τ_pol | 12 s | **1200 s** |
+| τ2 (diffusion) | 300 s | **8,3 h** |
+| τ_hyst | 2000 s | **55 h** |
+
+La polarisation et l'hystérésis ne s'établissaient donc jamais : `V_pol_state`
+restait ≈ 0 et l'OCV calculé était biaisé.
+
+**Correctif** : `addMeasurementWithInterval()` mémorise l'intervalle qu'il a
+réellement utilisé.
+
+### 🏷️ Divers
+
+- Version `2.0.0` → `2.0.1` (`library.json` + macro)
+
 ## [2.0.0] - 2026-10-19
 
 ### 💥 BREAKING — les deux compteurs redeviennent des INTÉGRATEURS PURS

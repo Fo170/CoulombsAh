@@ -44,7 +44,7 @@
  * Fo170/Persistance : on restaure via setTotalCoulombs() et on sauvegarde
  * via getTotalCoulombs() (ou getCoulombs()).
  *
- * Version: 2.0.0
+ * Version: 2.0.1
  * Date: Octobre 2026
  */
 
@@ -52,7 +52,7 @@
 #define COULOMB_H
 
 // Version de la librairie (source UNIQUE — agrégée par src/liste_lib.h)
-#define __COULOMB_H_VERSION__ "2.0.0"
+#define __COULOMB_H_VERSION__ "2.0.1"
 
 #include <Arduino.h>
 #include <climits>
@@ -234,6 +234,23 @@ public:
 
         // Filtrer l'intervalle
         _avgIntervalSec = _filterAlpha * _avgIntervalSec + (1 - _filterAlpha) * intervalSec;
+
+        // ⚠️ v2.0.1 (CORRECTIF) — mémoriser l'intervalle utilisé.
+        // `getLastInterval()` n'était renseigné QUE par `addMeasurement()`
+        // (horodatage micros). Un appelant qui passe par
+        // `addMeasurementWithInterval()` — c'est le cas de `CoulombFct` dans le
+        // firmware Coulométre — laissait `_lastIntervalSec` à sa valeur
+        // d'initialisation (0,001 s) POUR TOUJOURS.
+        // Conséquence en aval : `BatteryKalman::update()` lit
+        // `coulombMeter->getLastInterval()` comme pas de temps → il valait
+        // 0,001 s au lieu de 0,1 s, soit 100× trop petit. Toutes les constantes
+        // de temps du modèle étaient dilatées d'autant :
+        //     τ_pol  12 s   → 1200 s
+        //     τ2     300 s  → 8,3 h
+        //     τ_hyst 2000 s → 55 h
+        // La polarisation et l'hystérésis ne s'établissaient donc jamais,
+        // V_pol_state restait ≈ 0 et l'OCV était biaisé.
+        _lastIntervalSec = intervalSec;
 
         // Intégration pure : ΔC = I × Δt
         float coulombDelta = currentAmps * intervalSec;
